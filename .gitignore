@@ -1,0 +1,10 @@
+node_modules/
+dist/
+frontend/
+coverage/
+.claude/handoffs/
+*.log
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/

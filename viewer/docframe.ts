@@ -130,6 +130,16 @@ export class DocFrame {
     const sec = item.target?.section ? this.doc.getElementById(item.target.section) : null;
     if (sec?.matches('details')) (sec as HTMLDetailsElement).open = true;
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    // A big page is still laying out (images decoding, details opening) when this runs,
+    // so the first scroll can land short. Look again, and re-aim if the passage is not in view.
+    const target = a.range ?? el;
+    const settle = (n: number) =>
+      setTimeout(() => {
+        const r = target.getBoundingClientRect();
+        if (r.bottom < 0 || r.top > this.win.innerHeight) el.scrollIntoView({ block: 'center' });
+        if (n > 0) settle(n - 1);
+      }, 500);
+    settle(3);
   }
 
   /** The item whose passage contains a point the reader clicked, if any. */

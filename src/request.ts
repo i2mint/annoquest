@@ -6,7 +6,7 @@
  * every item's target against the document text and fails loudly on a passage
  * that is missing or ambiguous, so a request with a dangling anchor never ships.
  */
-import { findQuote, indexText, passageHash, type TextIndex } from './anchor';
+import { findQuote, indexText, passageHash, sectionSpan, sliceIndex, type TextIndex } from './anchor';
 import { AnnoquestError } from './errors';
 import { resolveResponseType } from './presets';
 import { Request, type Doc, type Item, type RequestInput } from './spec';
@@ -62,8 +62,13 @@ export function createRequest(input: CreateInput, { now = () => new Date().toISO
   return req;
 }
 
-/** Parse and validate an already-built request (e.g. read from a file). */
+/**
+ * Parse and validate an already-built request (e.g. read from a file or a link).
+ * Unlike `createRequest`, it never invents an id: answers are keyed by it.
+ */
 export function parseRequest(value: unknown): Request {
+  const id = (value as { id?: unknown } | null)?.id;
+  if (typeof id !== 'string' || !id) throw new AnnoquestError('invalid', 'This request has no id. Build it with `annoquest create` (or createRequest) first.');
   return createRequest(value as CreateInput);
 }
 
@@ -90,23 +95,21 @@ export interface CheckReport {
 export function checkItem(item: Item, doc: Document, cache = new Map<Node, TextIndex>()): ItemCheck {
   const t = item.target;
   if (!t || (!t.section && !t.quote)) return { item: item.id, ok: true, how: 'none' };
-  let scope: Node = doc.body ?? doc.documentElement;
+  const root: Node = doc.body ?? doc.documentElement;
+  const index = cache.get(root) ?? cache.set(root, indexText(root)).get(root)!;
+  let span = { start: 0, end: index.text.length };
   if (t.section) {
     const el = doc.getElementById(t.section);
     if (!el) return { item: item.id, ok: false, problem: `There is no element with id "${t.section}" in the document.` };
-    scope = el;
+    span = sectionSpan(index, el);
   }
-  const idx = (n: Node) => cache.get(n) ?? cache.set(n, indexText(n)).get(n)!;
-  if (!t.quote) {
-    const text = idx(scope).text;
-    return { item: item.id, ok: true, how: 'section', passage: text.slice(0, 280), passageHash: undefined };
-  }
-  let index = idx(scope);
-  let r = findQuote(index, t.quote);
+  if (!t.quote) return { item: item.id, ok: true, how: 'section', passage: index.text.slice(span.start, Math.min(span.end, span.start + 280)) };
+  let r = findQuote(sliceIndex(index, span.start, span.end), t.quote);
+  let offset = span.start;
   let widened = false;
   if (!r.ok && t.section) {
-    index = idx(doc.body ?? doc.documentElement);
     r = findQuote(index, t.quote);
+    offset = 0;
     widened = r.ok;
   }
   if (!r.ok) {
@@ -116,7 +119,7 @@ export function checkItem(item: Item, doc: Document, cache = new Map<Node, TextI
         : `The quote "${t.quote.exact.slice(0, 60)}" is not in the document${t.section ? ` (looked in #${t.section}, then everywhere)` : ''}. Copy it from the document as served.`;
     return { item: item.id, ok: false, problem };
   }
-  const passage = index.text.slice(r.match.start, r.match.end);
+  const passage = index.text.slice(r.match.start + offset, r.match.end + offset);
   return {
     item: item.id,
     ok: true,

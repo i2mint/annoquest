@@ -41,13 +41,20 @@ export interface Summary {
   extras: Array<{ reader: string; quote?: string; section?: string; comment: string; at: string }>;
 }
 
-/** Parse responses from anything JSON-ish; drops (and reports) what does not belong to the request. */
+/**
+ * Parse responses from anything JSON-ish; drops (and reports) what does not belong to the request.
+ * A server's record (`{responses, by, at}`) keeps its `by`; a bare responses document (a reply
+ * link, a download) is the reader's own claim, so any `by` in it is dropped.
+ */
 export function parseResponses(values: unknown[], request?: Pick<Request, 'id'>) {
   const ok: Responses[] = [];
   const rejected: Array<{ index: number; reason: string }> = [];
   values.forEach((v, index) => {
-    const raw = v && typeof v === 'object' && 'responses' in (v as object) && !('answers' in (v as object)) ? (v as { responses: unknown; by?: string }) : null;
-    const candidate = raw ? { ...(raw.responses as object), ...(raw.by ? { by: raw.by } : {}) } : v;
+    const o = (v ?? {}) as Record<string, unknown>;
+    const wrapped = 'responses' in o && !('answers' in o);
+    const inner = (wrapped ? o.responses : o) as Record<string, unknown>;
+    const { by: _claimed, ...rest } = inner ?? {};
+    const candidate = wrapped && typeof o.by === 'string' ? { ...rest, by: o.by } : rest;
     const p = Responses.safeParse(candidate);
     if (!p.success) return rejected.push({ index, reason: p.error.issues[0]?.message ?? 'not a responses document' });
     if (request && p.data.request !== request.id) return rejected.push({ index, reason: `belongs to request ${p.data.request}` });
@@ -57,7 +64,7 @@ export function parseResponses(values: unknown[], request?: Pick<Request, 'id'>)
 }
 
 /** Who a responses document is from: the server-asserted identity first, then the reader's own. */
-export const readerKey = (r: Responses) => r.by ?? r.reader.email ?? r.reader.id ?? r.reader.name ?? 'anonymous';
+export const readerKey = (r: Responses) => (r.by ?? r.reader.email)?.toLowerCase() ?? r.reader.id ?? r.reader.name ?? 'anonymous';
 
 /** Keep the latest responses per reader (by `updatedAt`). */
 export function latestPerReader(all: Responses[]): Responses[] {
@@ -77,8 +84,10 @@ export function summarize(request: Request, all: Responses[]): Summary {
   // Expected readers: the request's, matched to responses by id or email; plus anyone who answered.
   const keyOfReader = new Map<string, string>();
   for (const rd of request.readers) {
-    const r = latest.find((x) => [x.by, x.reader.email, x.reader.id].some((k) => k && (k === rd.email || k === rd.id)));
-    keyOfReader.set(rd.id, r ? readerKey(r) : rd.email ?? rd.id);
+    const email = rd.email?.toLowerCase();
+    // A server-asserted identity is matched on its own; only unattributed responses match by claimed id or email.
+    const r = latest.find((x) => (x.by ? x.by.toLowerCase() === email : (!!email && x.reader.email?.toLowerCase() === email) || x.reader.id === rd.id));
+    keyOfReader.set(rd.id, r ? readerKey(r) : email ?? rd.id);
   }
   const respondents = new Set(latest.map(readerKey));
   const byKey = new Map(latest.map((r) => [readerKey(r), r]));
@@ -124,9 +133,11 @@ export function summarize(request: Request, all: Responses[]): Summary {
         ? 'discuss'
         : missing.length
           ? 'pending'
-          : answers.length && tones.every((t) => t === 'positive')
-            ? 'aligned'
-            : 'neutral';
+          : !answers.length
+            ? 'pending'
+            : tones.every((t) => t === 'positive')
+              ? 'aligned'
+              : 'neutral';
     return { id: item.id, title: item.title, prompt: item.prompt, priority: item.priority, status, answers, missing };
   });
 

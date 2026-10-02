@@ -36,7 +36,7 @@ Then one of:
 - `annoquest link request.json --viewer <viewer url> [--reader id]` — the request rides in the link (keep under ~2000 characters for email; `tier` says).
 - A request with `"sink": {"kind": "http", "url": "/api"}` served by an annoquest server — answers autosubmit, identity comes from the gateway. Link: `<server>/#r=…` (from `annoquest link`), or `<server>/?spec=/api/requests/<id>` once the request is registered.
 
-Never send the link yourself unless you were asked to: hand it to the person who asked.
+With a server, the sender must open the link once before it goes out (that registers it; only the sender can). Never send the link yourself unless you were asked to: hand it to the person who asked.
 
 ## 4. Collect
 

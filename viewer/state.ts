@@ -21,6 +21,8 @@ export interface ViewerState {
   current: string | null;
   sink: SinkState;
   localSaved: boolean;
+  /** The requester is looking at their own request: nothing is sent. */
+  preview: boolean;
   /** Fresh passage hashes from the live document, per item. */
   seen: Record<string, string | undefined>;
   init(p: { request: Request; reader: Partial<Reader> & { key: string }; responses: Responses }): void;
@@ -36,6 +38,7 @@ export interface ViewerState {
   setLocalSaved(ok: boolean): void;
   setSeen(id: string, hash: string | undefined): void;
   setName(name: string): void;
+  setPreview(on: boolean): void;
 }
 
 const now = () => new Date().toISOString();
@@ -51,6 +54,7 @@ export const useViewer = create<ViewerState>()(
     current: null,
     sink: { kind: 'local' },
     localSaved: true,
+    preview: false,
     seen: {},
     init: ({ request, reader, responses }) =>
       set((s) => {
@@ -100,6 +104,7 @@ export const useViewer = create<ViewerState>()(
       }),
     setSink: (sink) => set((s) => void (s.sink = sink)),
     setLocalSaved: (ok) => set((s) => void (s.localSaved = ok)),
+    setPreview: (on) => set((s) => void (s.preview = on)),
     setSeen: (id, hash) => set((s) => void (s.seen[id] = hash)),
     setName: (name) =>
       set((s) => {

@@ -7,7 +7,7 @@ With no header configured the app runs anonymously, for local use.
 
 Who may do what:
 
-- anyone signed in may register a request (``PUT``; write-once, the id is the capability);
+- only a request's sender (its ``requester.email``, or an owner) may register it (``PUT``, write-once);
 - a request's readers (by email, when it lists any) and its owners may open it and answer;
 - a reader reads back only their own answers; owners (the request's ``requester.email``,
   plus ``owners``) read everyone's.
@@ -33,6 +33,8 @@ _log = logging.getLogger(__name__)
 IDENTITY_MAX_CHARS = 254
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
 MAX_RESPONSES_BYTES = 2 * 1024 * 1024
+#: For documents served at /doc/: no script, still same-origin (so the viewer can read the frame).
+DOC_CSP = "sandbox allow-same-origin allow-popups; default-src 'self' data:; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
 
 _HERE = Path(__file__).resolve().parent
 #: Where the built viewer is looked for: the deployed ref first, then a local build.
@@ -79,7 +81,7 @@ def mk_app(
         with the viewer (default: ``$ANNOQUEST_DOCS_DIR``; none serves nothing there).
     """
     header = identity_header or os.environ.get("ANNOQUEST_IDENTITY_HEADER") or None
-    owner_set = {o.strip() for o in (owners if owners is not None else os.environ.get("ANNOQUEST_OWNERS", "").split(",")) if o.strip()}
+    owner_set = {o.strip().lower() for o in (owners if owners is not None else os.environ.get("ANNOQUEST_OWNERS", "").split(",")) if o.strip()}
     store = Store(Path(data_dir) if data_dir else default_data_dir())
     viewer_path = _viewer_path(viewer)
     if viewer_path is None or not viewer_path.is_file():
@@ -87,25 +89,30 @@ def mk_app(
 
     def identity(req: Request) -> str | None:
         if dev_user:
-            return dev_user
+            return dev_user.lower()
         if not header:
             return None
-        cleaned = " ".join((req.headers.get(header) or "").split())[:IDENTITY_MAX_CHARS].strip()
+        cleaned = " ".join((req.headers.get(header) or "").split())[:IDENTITY_MAX_CHARS].strip().lower()
         return cleaned or None
 
     def is_owner(user: str | None, request: dict) -> bool:
         if user is None:
             return not header and not dev_user  # anonymous local mode: one person, all access
-        return user in owner_set or user == (request.get("requester") or {}).get("email")
+        return user in owner_set or user == ((request.get("requester") or {}).get("email") or "").lower()
 
     def may_read(user: str | None, request: dict) -> bool:
-        emails = [r.get("email") for r in request.get("readers") or [] if r.get("email")]
+        emails = [r["email"].lower() for r in request.get("readers") or [] if r.get("email")]
         return is_owner(user, request) or not emails or user in emails
 
     async def body_json(req: Request, limit: int):
-        raw = await req.body()
-        if len(raw) > limit:
+        declared = req.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > limit:
             return None, _err(413, f"Body over {limit} bytes.")
+        raw = b""
+        async for chunk in req.stream():
+            raw += chunk
+            if len(raw) > limit:
+                return None, _err(413, f"Body over {limit} bytes.")
         try:
             return json.loads(raw), None
         except ValueError:
@@ -131,6 +138,11 @@ def mk_app(
                 return err
             if not isinstance(data, dict) or data.get("id") != rid or data.get("schema") != "annoquest/request":
                 return _err(400, "The body is not the annoquest request with this id.")
+            if (header or dev_user) and not user:
+                return _err(401, "Sign in to register a request.")
+            # Only its sender registers a request: a reader who could register it first would own it.
+            if not is_owner(user, data):
+                return _err(403, "Only the sender of this request (its requester) can register it.")
             created = store.put_request(data, by=user)
             return JSONResponse({"id": rid, "created": created}, status_code=201 if created else 200)
         request, err = load(rid)
@@ -149,6 +161,8 @@ def mk_app(
         if not may_read(user, request):
             return _err(403, "This request was not sent to you.")
         if req.method == "POST":
+            if (header or dev_user) and not user:
+                return _err(401, "Sign in to send answers.")
             data, err = await body_json(req, MAX_RESPONSES_BYTES)
             if err:
                 return err
@@ -158,7 +172,7 @@ def mk_app(
             return JSONResponse({"saved": name}, status_code=201)
         if not is_owner(user, request):
             return _err(403, "Only the requester can read everyone's answers.")
-        return JSONResponse({"request": rid, "responses": [r["responses"] for r in store.latest_all(rid)]})
+        return JSONResponse({"request": rid, "responses": list(store.latest_all(rid))})
 
     async def mine(req: Request):
         rid = req.path_params["rid"]
@@ -167,7 +181,7 @@ def mk_app(
         if err:
             return err
         rec = store.latest(rid, user)
-        return JSONResponse(rec["responses"]) if rec else _err(404, "No answers yet.")
+        return JSONResponse(rec) if rec else _err(404, "No answers yet.")
 
     async def api_404(req: Request):
         return _err(404, f"{req.url.path} is not in the API.")
@@ -186,7 +200,9 @@ def mk_app(
         target = (root / req.path_params["path"]).resolve()
         if root not in target.parents or not target.is_file() or any(part.startswith(".") for part in target.relative_to(root).parts):
             return _err(404, "No such document.")
-        return FileResponse(target)
+        # Served same-origin with the viewer, so a document must never run script here,
+        # whether framed, opened in a new tab, or visited directly.
+        return FileResponse(target, headers={"Content-Security-Policy": DOC_CSP, "X-Content-Type-Options": "nosniff"})
 
     routes = [
         Route("/doc/{path:path}", doc),

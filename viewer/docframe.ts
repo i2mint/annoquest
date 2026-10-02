@@ -7,7 +7,7 @@
  * to the frame's selection), open enclosing `<details>`, scroll, and turn the
  * reader's selection into a quote.
  */
-import { describeQuote, findQuote, indexText, matchToRange, positionOf, passageHash, type TextIndex } from '../src/anchor';
+import { describeQuote, findQuote, indexText, matchToRange, positionOf, passageHash, sectionSpan, sliceIndex, type TextIndex } from '../src/anchor';
 import type { Item, Quote, Target } from '../src/spec';
 
 export interface Anchored {
@@ -29,13 +29,6 @@ const STYLE = `
 .aq-section-current { outline: 3px solid rgba(245, 158, 11, 0.7); outline-offset: 6px; border-radius: 4px; }
 html { scroll-padding-top: 20vh; }
 `;
-
-const sliceIndex = (idx: TextIndex, start: number, end: number): TextIndex => ({
-  text: idx.text.slice(start, end),
-  nodes: idx.nodes,
-  nodeOf: idx.nodeOf.subarray(start, end),
-  offsetOf: idx.offsetOf.subarray(start, end),
-});
 
 /** The nearest heading-like text for a section element (its h1–h6 or summary). */
 function labelOf(el: Element | null): string | undefined {
@@ -64,18 +57,7 @@ export class DocFrame {
 
   private sectionBounds(id: string): { el: Element; start: number; end: number } | null {
     const el = this.doc.getElementById(id);
-    if (!el) return null;
-    const start = positionOf(this.index, el, 0);
-    const after = el.nextSibling ?? null;
-    let end = this.index.text.length;
-    if (after) end = positionOf(this.index, after, 0);
-    else if (el.parentNode) {
-      // last child: the end of the parent's text
-      let p: Node | null = el;
-      while (p && !p.nextSibling) p = p.parentNode;
-      if (p?.nextSibling) end = positionOf(this.index, p.nextSibling, 0);
-    }
-    return { el, start, end: Math.max(start, end) };
+    return el ? { el, ...sectionSpan(this.index, el) } : null;
   }
 
   anchor(item: Pick<Item, 'id' | 'target'>): Anchored {

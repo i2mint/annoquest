@@ -6,7 +6,7 @@
  * non-zero exit, nothing interactive. `annoquest help` lists the commands.
  */
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parseHTML } from 'linkedom';
@@ -58,13 +58,15 @@ function docArgs(values: string[] | undefined): Record<string, string> {
   return m;
 }
 
-async function fetchText(where: string, base: string): Promise<string> {
+async function fetchText(where: string, base: string, { confine = false } = {}): Promise<string> {
   if (/^https?:\/\//.test(where)) {
     const res = await fetch(where, { headers: { Accept: 'text/html' } });
     if (!res.ok) throw new AnnoquestError('io', `GET ${where} answered ${res.status}. If it is behind a login, save the page and pass --doc <id>=<file>.`);
     return res.text();
   }
-  const p = resolve(base, where);
+  const p = resolve(base, where.replace(/^\/+/, confine ? '' : '/'));
+  // A request file names its own documents; it may not reach outside its folder (pass --doc for that).
+  if (confine && !p.startsWith(resolve(base) + sep)) throw new AnnoquestError('io', `Document "${where}" is outside the request's folder; pass --doc <id>=<path> to use it.`);
   if (!existsSync(p)) throw new AnnoquestError('io', `No file at ${p}. Pass --doc <id>=<path> to say where the document is.`);
   return readFileSync(p, 'utf8');
 }
@@ -75,7 +77,7 @@ async function loadDocuments(request: RequestT, overrides: Record<string, string
   for (const d of request.documents) {
     if (overrides[d.id]) html[d.id] = await fetchText(overrides[d.id]!, process.cwd());
     else if (d.source.kind === 'inline') html[d.id] = d.source.html;
-    else html[d.id] = await fetchText(d.source.url, base);
+    else html[d.id] = await fetchText(d.source.url, base, { confine: true });
   }
   return html;
 }

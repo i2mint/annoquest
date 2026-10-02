@@ -190,7 +190,7 @@ function DocView({ doc, hidden, onFrame }: { doc: Doc; hidden: boolean; onFrame:
           This document is on another site, so passages can't be highlighted here. Each item shows its passage, with a link to it in the original.
         </p>
       )}
-      <iframe ref={ref} title={doc.title ?? doc.id} src={src} srcDoc={srcDoc} onLoad={onLoad} sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" />
+      <iframe ref={ref} title={doc.title ?? doc.id} src={src} srcDoc={srcDoc} onLoad={onLoad} sandbox="allow-same-origin allow-popups" />
     </div>
   );
 }
@@ -208,10 +208,14 @@ function Header({ request, sink }: { request: Request; sink: HttpSink | null }) 
   let status: { text: string; cls: string; action?: { label: string; run: () => void } };
   if (s.kind === 'local') status = localSaved ? { text: 'Saved on this device', cls: 'ok' } : { text: "Couldn't save on this device — use “Download” when done", cls: 'bad' };
   else if (s.kind === 'saving') status = { text: 'Saving…', cls: 'busy' };
-  else if (s.kind === 'sent') status = { text: s.at ? `Saved · sent ${new Date(s.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Saved', cls: 'ok' };
+  else if (s.kind === 'pending') status = { text: 'Saved on this device · sending shortly', cls: 'busy' };
+  else if (s.kind === 'waiting') status = { text: "Saved on this device · will send once the sender has opened this request", cls: 'warn' };
+  else if (s.kind === 'sent') status = { text: s.at ? `Saved · sent ${new Date(s.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Up to date', cls: 'ok' };
   else if (s.kind === 'offline') status = { text: 'Saved on this device · will send when back online', cls: 'warn', action: { label: 'Retry', run: () => void sink?.flush() } };
   else if (s.kind === 'auth') status = { text: 'Saved on this device · sign in again to send', cls: 'warn', action: { label: 'Sign in', run: () => location.reload() } };
   else status = { text: s.message, cls: 'bad' };
+  const preview = useViewer((x) => x.preview);
+  if (preview) status = { text: 'Preview: you sent this request, so nothing you click here is sent', cls: 'busy' };
   const who = reader.name ?? user ?? reader.email;
   return (
     <header className="panel-head">

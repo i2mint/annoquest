@@ -48,9 +48,32 @@ def test_requests_are_write_once(client):
     c, _ = client
     assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ada@example.org")).status_code == 201
     other = {**REQUEST, "title": "hijacked"}
-    assert c.put(f"/api/requests/{RID}", json=other, headers=as_("eve@example.org")).json() == {"id": RID, "created": False}
+    assert c.put(f"/api/requests/{RID}", json=other, headers=as_("ADA@example.org")).json() == {"id": RID, "created": False}
     assert c.get(f"/api/requests/{RID}", headers=as_("sam@example.org")).json()["title"] == "T"
     assert c.put("/api/requests/other-id-99", json=REQUEST, headers=as_("ada@example.org")).status_code == 400
+
+
+def test_a_reader_cannot_register_or_take_over(client):
+    c, _ = client
+    # The sender registers before sending the link (the viewer does it when they preview it).
+    assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ada@example.org")).status_code == 201
+    # A reader cannot register it, nor replace it by naming himself as its sender.
+    forged = {**REQUEST, "requester": {"email": "sam@example.org"}}
+    assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("sam@example.org")).status_code == 403
+    assert c.put(f"/api/requests/{RID}", json=forged, headers=as_("sam@example.org")).json()["created"] is False
+    assert c.get(f"/api/requests/{RID}/responses", headers=as_("sam@example.org")).status_code == 403
+    assert c.put(f"/api/requests/{RID}", json=REQUEST).status_code == 401
+
+
+def test_two_tabs_do_not_erase_each_other(client):
+    c, _ = client
+    c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ada@example.org"))
+    tab_a = responses({"a": {"value": "agree", "at": "2026-10-02T10:00:00Z", "rev": 3}}, at="2026-10-02T10:00:00Z")
+    tab_b = responses({"b": {"value": "discuss", "at": "2026-10-02T10:01:00Z", "rev": 1}}, at="2026-10-02T10:01:00Z")
+    for body in (tab_a, tab_b):
+        c.post(f"/api/requests/{RID}/responses", json=body, headers=as_("Sam@Example.org"))
+    mine = c.get(f"/api/requests/{RID}/responses/mine", headers=as_("sam@example.org")).json()
+    assert set(mine["answers"]) == {"a", "b"}
 
 
 def test_only_listed_readers_and_owners(client):
@@ -103,7 +126,8 @@ def test_docs_dir_is_served_without_escaping(tmp_path):
     (tmp_path / "docs" / ".git" / "config").write_text("secret")
     (tmp_path / "outside.txt").write_text("no")
     c = TestClient(mk_app(data_dir=tmp_path / "data", docs_dir=tmp_path / "docs"))
-    assert c.get("/doc/a.html").text == "<p>doc</p>"
+    r = c.get("/doc/a.html")
+    assert r.text == "<p>doc</p>" and r.headers["content-security-policy"].startswith("sandbox")
     assert c.get("/doc/.git/config").status_code == 404
     assert c.get("/doc/../outside.txt").status_code == 404
     assert c.get("/doc/%2e%2e/outside.txt").status_code == 404

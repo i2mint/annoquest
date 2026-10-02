@@ -17,6 +17,8 @@ import {
   replyLink,
   requestLink,
   summarize,
+  parseResponses,
+  parseRequest,
   summaryMarkdown,
   toElicitation,
   type Responses,
@@ -161,5 +163,30 @@ describe('elicitation', () => {
     expect(e.requestedSchema.properties.answer).toMatchObject({ type: 'string', oneOf: expect.arrayContaining([{ const: 'approve', title: 'Approve' }]) });
     expect(e.requestedSchema.properties.comment?.description).toMatch(/Changes required/);
     expect(e.message).toContain('OK with the cap?');
+  });
+});
+
+describe('review fixes', () => {
+  it('reads block boundaries as spaces, and scopes a heading id to its section', () => {
+    const d = parseHTML('<html><body><h2 id="a">Alpha</h2><p>One end.</p><p>Next start.</p><h2 id="b">Beta</h2><p>Other.</p></body></html>').document as unknown as Document;
+    const idx = indexText(d.body);
+    expect(idx.text.trimEnd()).toBe('Alpha One end. Next start. Beta Other.');
+    const r = createRequest({ title: 't', documents: [{ id: 'd', source: { kind: 'inline', html: '' } }], items: [{ prompt: 'p', target: { section: 'a', quote: { exact: 'end. Next' } } }, { prompt: 'q', target: { section: 'a', quote: { exact: 'Other' } } }] });
+    const report = checkRequest(r, { d });
+    expect(report.items[0]).toMatchObject({ ok: true, how: 'exact' });
+    expect(report.items[1]!.problem).toMatch(/Found outside #a/);
+  });
+
+  it('maps an element-end boundary to the text after the element', () => {
+    const d = new JSDOM('<p id="x">abc</p><p>def</p>').window.document;
+    const idx = indexText(d.body);
+    expect(positionOf(idx, d.getElementById('x')!, 1)).toBe(idx.text.indexOf('def'));
+  });
+
+  it('never trusts a client-claimed `by`, and requires ids when parsing', () => {
+    const base = { request: 'r1', answers: {}, updatedAt: '2026-10-02T10:00:00Z' };
+    const { responses } = parseResponses([{ ...base, by: 'forged@example.org' }, { responses: base, by: 'real@example.org' }]);
+    expect(responses.map((r) => r.by)).toEqual([undefined, 'real@example.org']);
+    expect(() => parseRequest({ title: 't', documents: [{ id: 'd', source: { kind: 'url', url: 'x' } }], items: [{ prompt: 'p' }] })).toThrow(/no id/);
   });
 });

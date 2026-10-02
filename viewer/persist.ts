@@ -23,8 +23,10 @@ export async function loadLocal(store: DataProvider<Stored>, id: string): Promis
   }
 }
 
+/** Write locally, merged with what is stored (another tab may have written since). */
 export async function saveLocal(store: DataProvider<Stored>, value: Stored): Promise<boolean> {
   try {
+    value = mergeResponses(value, await loadLocal(store, value.id));
     if (store.upsert) await store.upsert(value);
     else await store.update(value.id, value).catch(() => store.create(value));
     return true;
@@ -54,6 +56,8 @@ export function mergeResponses<T extends Responses>(a: T, b: Responses | undefin
 
 export type SinkState =
   | { kind: 'local' }
+  | { kind: 'pending' }
+  | { kind: 'waiting' }
   | { kind: 'saving' }
   | { kind: 'sent'; at: string }
   | { kind: 'offline'; retryIn: number }
@@ -72,6 +76,16 @@ export interface HttpSink {
 
 const JSON_HEADERS = { Accept: 'application/json', 'Content-Type': 'application/json' };
 
+/** The sink a request asks for (seam 4): null for `local`. Add a sink kind here, nowhere else. */
+export function makeSink(request: Request, onState: (s: SinkState) => void): HttpSink | null {
+  switch (request.sink.kind) {
+    case 'http':
+      return createHttpSink(request.sink.url, request.id, onState);
+    default:
+      return null;
+  }
+}
+
 export function createHttpSink(
   base: string,
   requestId: string,
@@ -86,35 +100,56 @@ export function createHttpSink(
   let inFlight: Promise<void> | null = null;
   let authBlocked = false;
 
+  const retry = (state: SinkState) => {
+    backoff = Math.min(maxBackoff, backoff ? backoff * 2 : 5000);
+    onState(state.kind === 'offline' ? { kind: 'offline', retryIn: backoff } : state);
+    clearTimeout(timer);
+    timer = setTimeout(() => void flush(), backoff);
+  };
+
+  const post = (value: Responses, keepalive: boolean) => {
+    const body = JSON.stringify(value);
+    return fetch(at(`/requests/${encodeURIComponent(requestId)}/responses`), {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body,
+      credentials: 'same-origin',
+      // Browsers cap keepalive bodies at 64 KB; above that a normal request is the better bet.
+      keepalive: keepalive && body.length < 60000,
+    });
+  };
+
   const send = async (keepalive = false) => {
     if (!pending) return;
     const value = pending;
     pending = null;
     onState({ kind: 'saving' });
     try {
-      const res = await fetch(at(`/requests/${encodeURIComponent(requestId)}/responses`), {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify(value),
-        credentials: 'same-origin',
-        keepalive,
-      });
-      if (res.status === 401) {
+      const res = await post(value, keepalive);
+      const json = res.headers.get('content-type')?.includes('json') ? await res.json().catch(() => null) : null;
+      if (res.status === 401 || (res.ok && !json?.saved)) {
+        // 401, or a gateway's login page answering 200: the session is gone.
         pending ??= value;
         authBlocked = true;
         onState({ kind: 'auth' });
         return;
       }
+      if (res.status === 404) {
+        pending ??= value; // the request is not registered yet: keep trying, slowly
+        return retry({ kind: 'waiting' });
+      }
+      if (res.status >= 400 && res.status < 500) {
+        pending ??= value;
+        onState({ kind: 'error', message: `Your answers are saved here, but the server refused them (${json?.detail ?? res.status}).` });
+        return;
+      }
       if (!res.ok) throw new Error(`The server answered ${res.status}.`);
       backoff = 0;
       authBlocked = false;
-      onState({ kind: 'sent', at: new Date().toISOString() });
+      onState(pending ? { kind: 'pending' } : { kind: 'sent', at: new Date().toISOString() });
     } catch (e) {
       pending ??= value; // keep it for the retry unless newer input replaced it
-      backoff = Math.min(maxBackoff, backoff ? backoff * 2 : 5000);
-      onState({ kind: 'offline', retryIn: backoff });
-      clearTimeout(timer);
-      timer = setTimeout(() => void flush(), backoff);
+      retry({ kind: 'offline', retryIn: 0 });
       if (!(e instanceof TypeError)) console.warn('[annoquest] submit failed:', e);
     }
   };
@@ -128,10 +163,21 @@ export function createHttpSink(
     return next;
   };
 
-  const onHide = () => {
-    if (document.visibilityState === 'hidden') void flush({ keepalive: true });
+  /** Last chance (page hidden or closing): send now, without queueing behind a send in flight. */
+  const lastChance = () => {
+    clearTimeout(timer);
+    if (!pending || authBlocked) return;
+    const value = pending;
+    pending = null;
+    void post(value, true).catch(() => {
+      pending ??= value;
+    });
   };
-  const onPageHide = () => void flush({ keepalive: true });
+
+  const onHide = () => {
+    if (document.visibilityState === 'hidden') lastChance();
+  };
+  const onPageHide = () => lastChance();
   const onOnline = () => void flush();
   addEventListener('pagehide', onPageHide);
   document.addEventListener('visibilitychange', onHide);
@@ -173,6 +219,7 @@ export function createHttpSink(
     schedule(value) {
       pending = value;
       if (authBlocked) return;
+      onState({ kind: 'pending' });
       clearTimeout(timer);
       timer = setTimeout(() => void flush(), delay);
     },

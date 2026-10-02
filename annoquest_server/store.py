@@ -30,16 +30,48 @@ def valid_id(request_id: str) -> bool:
     return bool(ID_PATTERN.match(request_id))
 
 
-def reader_key(identity: str) -> str:
-    """An opaque, stable folder name for a reader."""
-    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+def reader_key(identity: str, salt: str = "") -> str:
+    """An opaque, stable folder name for a reader (case-insensitive, salted per data directory)."""
+    return hashlib.sha256(f"{salt}:{identity.strip().lower()}".encode("utf-8")).hexdigest()[:16]
 
 
-def _write_once(path: Path, data: dict) -> None:
+def merge_responses(saves: list[dict]) -> dict | None:
+    """Fold a reader's saves into one: per answer the higher (rev, at) wins; extras are unioned.
+
+    Two tabs or two devices each send their whole copy; folding instead of taking the
+    newest file means neither erases the other.
+    """
+    if not saves:
+        return None
+    saves = sorted(saves, key=lambda r: r.get("updatedAt") or "")
+    out = {**saves[-1], "answers": {}, "extras": []}
+    seen: set[str] = set()
+    for r in saves:
+        for k, a in (r.get("answers") or {}).items():
+            cur = out["answers"].get(k)
+            if cur is None or (a.get("rev", 0), a.get("at", "")) >= (cur.get("rev", 0), cur.get("at", "")):
+                out["answers"][k] = a
+        for x in r.get("extras") or []:
+            if x.get("id") not in seen:
+                seen.add(x.get("id"))
+                out["extras"].append(x)
+        if r.get("finishedAt") and not out.get("finishedAt"):
+            out["finishedAt"] = r["finishedAt"]
+    return out
+
+
+def _write_once(path: Path, data: dict) -> bool:
+    """Write a complete file at `path` only if nothing is there; atomic and exclusive."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        os.link(tmp, path)  # fails if `path` exists: two concurrent writers cannot both win
+        return True
+    except FileExistsError:
+        return False
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _stamp() -> str:
@@ -60,6 +92,13 @@ class Store:
     def __post_init__(self) -> None:
         self.root = Path(self.root)
 
+    @property
+    def salt(self) -> str:
+        p = self.root / "salt"
+        if not p.is_file():
+            _write_once(p, {"salt": secrets.token_hex(16)})
+        return json.loads(p.read_text(encoding="utf-8"))["salt"]
+
     # ---- requests ----
     def _request_path(self, request_id: str) -> Path:
         return self.root / "requests" / f"{request_id}.json"
@@ -70,15 +109,11 @@ class Store:
 
     def put_request(self, request: dict, *, by: str | None) -> bool:
         """Store a request once. Returns False (and changes nothing) if it already exists."""
-        p = self._request_path(request["id"])
-        if p.exists():
-            return False
-        _write_once(p, {"request": request, "by": by, "at": _now()})
-        return True
+        return _write_once(self._request_path(request["id"]), {"request": request, "by": by, "at": _now()})
 
     # ---- responses ----
     def _reader_dir(self, request_id: str, identity: str) -> Path:
-        return self.root / "responses" / request_id / reader_key(identity)
+        return self.root / "responses" / request_id / reader_key(identity, self.salt)
 
     def add_responses(self, request_id: str, responses: dict, *, by: str) -> str:
         """Append one save; returns its file name."""
@@ -86,16 +121,19 @@ class Store:
         _write_once(self._reader_dir(request_id, by) / name, {"responses": {**responses, "by": by}, "by": by, "at": _now()})
         return name
 
+    def _fold(self, d: Path) -> dict | None:
+        files = sorted(d.glob("*.json")) if d.is_dir() else []
+        return merge_responses([json.loads(f.read_text(encoding="utf-8"))["responses"] for f in files])
+
     def latest(self, request_id: str, identity: str) -> dict | None:
-        d = self._reader_dir(request_id, identity)
-        files = sorted(f for f in d.glob("*.json")) if d.is_dir() else []
-        return json.loads(files[-1].read_text(encoding="utf-8")) if files else None
+        """A reader's current answers: all their saves, folded."""
+        return self._fold(self._reader_dir(request_id, identity))
 
     def latest_all(self, request_id: str) -> Iterator[dict]:
         base = self.root / "responses" / request_id
         if not base.is_dir():
             return
         for d in sorted(base.iterdir()):
-            files = sorted(d.glob("*.json"))
-            if files:
-                yield json.loads(files[-1].read_text(encoding="utf-8"))
+            folded = self._fold(d)
+            if folded:
+                yield folded

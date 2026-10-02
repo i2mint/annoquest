@@ -92,7 +92,7 @@ pip install "annoquest-server[server] @ git+https://github.com/i2mint/annoquest"
 ANNOQUEST_IDENTITY_HEADER=X-Forwarded-User uvicorn annoquest_server:mk_app --factory
 ```
 
-It serves the viewer at `/`, stores each request once and every save as a new file (`requests/<id>.json`, `responses/<id>/<reader>/<stamp>.json`, no emails in paths), lets a request's listed readers and its requester in, and lets only the requester read everyone's answers. `ANNOQUEST_DOCS_DIR` serves a folder at `/doc/` so documents are same-origin with the viewer. Collect by pointing `annoquest collect` at the data directory. See [annoquest_server/README.md](annoquest_server/README.md).
+**Open a request's link yourself before sending it**: that registers it (only its sender can), and the viewer shows a preview banner so nothing you click is sent. It serves the viewer at `/`, stores each request once and every save as a new file (`requests/<id>.json`, `responses/<id>/<reader>/<stamp>.json`, no emails in paths), lets a request's listed readers and its requester in, and lets only the requester read everyone's answers. `ANNOQUEST_DOCS_DIR` serves a folder at `/doc/` so documents are same-origin with the viewer. Collect by pointing `annoquest collect` at the data directory. See [annoquest_server/README.md](annoquest_server/README.md).
 
 ## For agents
 

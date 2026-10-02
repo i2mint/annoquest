@@ -14,6 +14,8 @@ import search from 'approx-string-match';
 import type { Quote } from './spec';
 
 const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'NAV', 'SVG']);
+// Block boundaries read as a space, so "end.</p><p>Next" is two words, as on screen.
+const BLOCK = new Set(['P', 'DIV', 'SECTION', 'ARTICLE', 'ASIDE', 'HEADER', 'FOOTER', 'MAIN', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'UL', 'OL', 'DL', 'DT', 'DD', 'TABLE', 'TR', 'TD', 'TH', 'CAPTION', 'BLOCKQUOTE', 'PRE', 'FIGURE', 'FIGCAPTION', 'DETAILS', 'SUMMARY', 'BR', 'HR']);
 const TEXT_NODE = 3;
 const ELEMENT_NODE = 1;
 
@@ -57,10 +59,21 @@ export function indexText(root: Node): TextIndex {
   const offsetOf: number[] = [];
   let text = '';
   let prevSpace = true;
+  const boundary = () => {
+    if (prevSpace || !text.length) return;
+    text += ' ';
+    prevSpace = true;
+    nodeOf.push(nodeOf[nodeOf.length - 1]!);
+    offsetOf.push(offsetOf[offsetOf.length - 1]!);
+  };
   const walk = (n: Node) => {
     if (n.nodeType === ELEMENT_NODE) {
-      if (SKIP.has((n as Element).tagName.toUpperCase())) return;
+      const tag = (n as Element).tagName.toUpperCase();
+      if (SKIP.has(tag)) return;
+      const block = BLOCK.has(tag);
+      if (block) boundary();
       for (let c = n.firstChild; c; c = c.nextSibling) walk(c);
+      if (block) boundary();
     } else if (n.nodeType === TEXT_NODE) {
       const data = (n as Text).data;
       const ni = nodes.push(n as Text) - 1;
@@ -166,10 +179,10 @@ export function matchToRange(index: TextIndex, match: Pick<Match, 'start' | 'end
 export function positionOf(index: TextIndex, node: Node, offset: number): number {
   let ni = index.nodes.indexOf(node as Text);
   if (ni === -1) {
-    // An element boundary: use the first indexed text node at or after it.
+    // An element boundary: the first indexed text node at or after that point.
     const child = node.childNodes[offset] ?? null;
-    const target = child ?? node;
-    ni = index.nodes.findIndex((t) => target === t || !!(target.compareDocumentPosition(t) & 4) || target.contains(t));
+    const after = (t: Node) => (child ? child === t || child.contains(t) || !!(child.compareDocumentPosition(t) & 4) : !node.contains(t) && !!(node.compareDocumentPosition(t) & 4));
+    ni = index.nodes.findIndex(after);
     if (ni === -1) return index.text.length;
     offset = 0;
   }
@@ -182,6 +195,35 @@ export function positionOf(index: TextIndex, node: Node, offset: number): number
     else hi = mid;
   }
   return lo;
+}
+
+/** A view of `[start, end)` of an index; matches in it are offset by `start`. */
+export const sliceIndex = (idx: TextIndex, start: number, end: number): TextIndex => ({
+  text: idx.text.slice(start, end),
+  nodes: idx.nodes,
+  nodeOf: idx.nodeOf.subarray(start, end),
+  offsetOf: idx.offsetOf.subarray(start, end),
+});
+
+const HEADING = /^H([1-6])$/;
+
+/**
+ * The text span of a section element: the element itself, or, for a heading, everything
+ * up to the next heading of the same or a higher level (how Markdown renders sections).
+ */
+export function sectionSpan(index: TextIndex, el: Element): { start: number; end: number } {
+  const start = positionOf(index, el, 0);
+  const level = HEADING.exec(el.tagName.toUpperCase())?.[1];
+  let stop: Node | null = null;
+  if (level) {
+    const doc = el.ownerDocument;
+    const hs = Array.from(doc.querySelectorAll('h1,h2,h3,h4,h5,h6'));
+    stop = hs.slice(hs.indexOf(el) + 1).find((h) => Number(h.tagName[1]) <= Number(level)) ?? null;
+  } else {
+    for (let p: Node | null = el; p && !stop; p = p.parentNode) stop = p.nextSibling;
+  }
+  const end = stop ? positionOf(index, stop, 0) : index.text.length;
+  return { start, end: Math.max(start, end) };
 }
 
 /** A quote for `[start, end)`, with enough context to be unique (at least `context` chars). */

@@ -6,29 +6,42 @@ import { createRoot } from 'react-dom/client';
 import { Responses } from '../src/spec';
 import { App } from './App';
 import { loadRequest } from './load';
-import { createHttpSink, defaultStore, loadLocal, mergeResponses, saveLocal, type HttpSink, type Stored } from './persist';
+import type { DataProvider } from '@zodal/store';
+import { defaultStore, loadLocal, makeSink, mergeResponses, saveLocal, type HttpSink, type Stored } from './persist';
 import { useViewer } from './state';
 import './styles.css';
 
-async function boot() {
-  const store = defaultStore();
+export interface ViewerOptions {
+  /** Where answers live on the device (seam 3); localStorage by default. */
+  store?: DataProvider<Stored>;
+}
+
+/** Load the request, work out who is reading, restore their answers, wire saving, render into `root`. */
+export async function mountViewer(root: HTMLElement, { store = defaultStore() }: ViewerOptions = {}) {
   let sink: HttpSink | null = null;
   try {
     const { request, origin, reader: readerParam } = await loadRequest();
     document.title = request.title;
     const v = useViewer.getState();
-    if (request.sink.kind === 'http') {
-      sink = createHttpSink(request.sink.url, request.id, (s) => useViewer.getState().setSink(s));
-      v.setSink({ kind: 'sent', at: '' });
-    }
-    const user = sink ? await sink.whoami() : null;
+    sink = makeSink(request, (s) => useViewer.getState().setSink(s));
+    if (sink) v.setSink({ kind: 'saving' });
+    const user = sink ? (await sink.whoami())?.toLowerCase() ?? null : null;
     v.setServerUser(user);
     const match =
-      request.readers.find((r) => (user && r.email === user) || (readerParam && r.id === readerParam)) ??
-      (request.readers.length === 1 && !readerParam ? request.readers[0] : undefined);
+      request.readers.find((r) => (user && r.email?.toLowerCase() === user) || (readerParam && r.id === readerParam)) ??
+      (request.readers.length === 1 && !readerParam && !user ? request.readers[0] : undefined);
     const key = match?.id ?? user ?? readerParam ?? 'me';
     const reader = { ...match, key };
     if (sink && origin !== 'spec') await sink.register(request);
+    // The requester opening their own request (not as a listed reader) is previewing it:
+    // registering it is useful, sending answers as theirs is not.
+    const preview = !!sink && !!user && !match && user === request.requester?.email?.toLowerCase();
+    if (preview) {
+      sink!.dispose();
+      sink = null;
+      v.setPreview(true);
+      v.setSink({ kind: 'local' });
+    }
 
     const id = `${request.id}:${key}`;
     const blank: Stored = {
@@ -36,8 +49,19 @@ async function boot() {
       id,
     };
     let responses: Stored = mergeResponses(blank, await loadLocal(store, id));
-    if (sink) responses = mergeResponses(responses, await sink.mine());
+    const remote = sink ? await sink.mine() : undefined;
+    responses = mergeResponses(responses, remote);
     v.init({ request, reader, responses });
+    if (sink) {
+      // Anything kept here but not yet on the server (closed while offline, signed out…) goes now.
+      const same = (a?: { answers: unknown; extras: unknown }, b?: { answers: unknown; extras: unknown }) =>
+        !!a && !!b && JSON.stringify([a.answers, a.extras]) === JSON.stringify([b.answers, b.extras]);
+      const has = Object.keys(responses.answers).length || responses.extras.length;
+      if (has && !same(responses, remote)) {
+        const { id: _drop, ...plain } = responses;
+        sink.schedule(plain as Responses);
+      } else v.setSink({ kind: 'sent', at: '' });
+    }
 
     // Every change: write locally at once, schedule the sink.
     useViewer.subscribe((s, prev) => {
@@ -50,7 +74,7 @@ async function boot() {
   } catch (e) {
     useViewer.getState().fail((e as Error).message);
   }
-  createRoot(document.getElementById('root')!).render(<App sink={sink} />);
+  createRoot(root).render(<App sink={sink} />);
 }
 
-void boot();
+void mountViewer(document.getElementById('root')!);

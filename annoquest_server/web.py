@@ -140,14 +140,19 @@ def mk_app(
                 return _err(400, "The body is not the annoquest request with this id.")
             if (header or dev_user) and not user:
                 return _err(401, "Sign in to register a request.")
+            existing = store.get_request(rid)
+            if existing is not None:
+                # Anyone holding a link that differs from what is registered under its id is told,
+                # sender or reader: a forged first registration cannot pass quietly.
+                same = json.dumps(existing.get("request"), sort_keys=True) == json.dumps(data, sort_keys=True)
+                return JSONResponse({"id": rid, "created": False}) if same else _err(409, "A different request is already registered under this id.")
             # Only its sender registers a request: a reader who could register it first would own it.
             if not is_owner(user, data):
                 return _err(403, "Only the sender of this request (its requester) can register it.")
             created = store.put_request(data, by=user)
-            if not created:
+            if not created:  # lost a race with an identical or different registration
                 stored = (store.get_request(rid) or {}).get("request")
                 if json.dumps(stored, sort_keys=True) != json.dumps(data, sort_keys=True):
-                    # Someone registered a different request under this id: say so, loudly.
                     return _err(409, "A different request is already registered under this id.")
             return JSONResponse({"id": rid, "created": created}, status_code=201 if created else 200)
         request, err = load(rid)

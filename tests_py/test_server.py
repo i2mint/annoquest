@@ -60,7 +60,8 @@ def test_a_reader_cannot_register_or_take_over(client):
     assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ada@example.org")).status_code == 201
     # A reader cannot register it, nor replace it by naming himself as its sender.
     forged = {**REQUEST, "requester": {"email": "sam@example.org"}}
-    assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("sam@example.org")).status_code == 403
+    assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("sam@example.org")).json()["created"] is False
+    assert c.put("/api/requests/unregistered-01", json={**REQUEST, "id": "unregistered-01"}, headers=as_("sam@example.org")).status_code == 403
     assert c.put(f"/api/requests/{RID}", json=forged, headers=as_("sam@example.org")).status_code == 409
     assert c.get(f"/api/requests/{RID}/responses", headers=as_("sam@example.org")).status_code == 403
     assert c.put(f"/api/requests/{RID}", json=REQUEST).status_code == 401
@@ -138,8 +139,9 @@ def test_a_forged_first_registration_is_loud(client):
     c, _ = client
     forged = {**REQUEST, "requester": {"email": "sam@example.org"}}
     assert c.put(f"/api/requests/{RID}", json=forged, headers=as_("sam@example.org")).status_code == 201
-    # The real sender's preview now gets a conflict, not a quiet "already there".
+    # The real sender's preview now gets a conflict, not a quiet "already there", and so does any reader with the real link.
     assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ada@example.org")).status_code == 409
+    assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("bob@example.org")).status_code == 409
 
 
 def test_bad_saves_are_refused_and_never_break_collection(client):

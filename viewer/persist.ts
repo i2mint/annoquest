@@ -157,6 +157,7 @@ export function createHttpSink(
       .then(async (res) => {
         const json = res.headers.get('content-type')?.includes('json') ? await res.json().catch(() => null) : null;
         if (!res.ok || !json?.saved) throw new Error(String(res.status));
+        if (!pending) onState({ kind: 'sent', at: new Date().toISOString() });
       })
       .catch(() => {
         // Not saved after all: keep it, and let the normal path retry (it sorts out why).

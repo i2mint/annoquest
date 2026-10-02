@@ -78,4 +78,14 @@ export async function mountViewer(root: HTMLElement, { store = defaultStore() }:
   createRoot(root).render(<App sink={sink} />);
 }
 
+// Following a link to another request from this page only changes the fragment, and the
+// browser does not reload for that. A different request is a different page: reload.
+const requestInHash = () => new URLSearchParams(location.hash.slice(1)).get('r');
+let shownHash = requestInHash();
+addEventListener('hashchange', () => {
+  const now = requestInHash();
+  if (now && now !== shownHash) location.reload();
+  shownHash = now;
+});
+
 void mountViewer(document.getElementById('root')!);

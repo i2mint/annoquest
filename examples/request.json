@@ -1,0 +1,15 @@
+{
+  "id": "example-pilot-plan-0001",
+  "title": "Pilot plan: please review",
+  "intro": "This is the plan for next month's field pilot. Three things matter most; the rest can wait.\n\nAnswer what you can; every answer is saved as you go.",
+  "requester": { "name": "Ada" },
+  "readers": [{ "id": "sam", "name": "Sam" }],
+  "documents": [{ "id": "plan", "title": "Pilot plan", "source": { "kind": "url", "url": "pilot-plan.html" } }],
+  "items": [
+    { "id": "read-goals", "title": "Skim the goals", "prompt": "Read the two goal paragraphs.", "priority": "must", "response": "read", "target": { "section": "goals" }, "minutes": 1 },
+    { "id": "timeline", "title": "Two weeks to three sites", "prompt": "Is two weeks realistic for three sites?", "priority": "must", "response": "agree", "labels": { "agree": "Realistic", "reservations": "Tight but OK", "disagree": "Unrealistic" }, "target": { "section": "timeline", "quote": { "exact": "ship the pilot to three sites in two weeks" } } },
+    { "id": "threshold", "title": "Quality threshold", "prompt": "Can you own the 90% threshold?", "priority": "must", "response": "implement", "target": { "quote": { "exact": "at least 90% of readings pass the automatic quality check" } } },
+    { "id": "budget", "title": "Budget cap", "prompt": "Do you approve the 10k cap and the cut-the-third-site rule?", "priority": "should", "response": "approve", "target": { "section": "budget", "quote": { "exact": "The budget is \"fixed\" at 10k - no more." } } },
+    { "id": "slip", "title": "Vendor risk", "prompt": "Anything to add on the vendor risk?", "priority": "could", "response": "comment", "target": { "section": "timeline-risks" } }
+  ]
+}

@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # never cancel a run on main: it may be publishing
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test
+      - run: pnpm smoke
+      - name: Validate shipped skills
+        run: |
+          for f in skills/*/SKILL.md; do
+            head -1 "$f" | grep -qx -- '---' || { echo "::error file=$f::missing frontmatter"; exit 1; }
+            grep -q '^name: ' "$f" && grep -q '^description: ' "$f" || { echo "::error file=$f::name/description missing"; exit 1; }
+          done
+
+  server:
+    name: Server adapter (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+      - run: uv venv && uv pip install -e ".[test]"
+      - run: .venv/bin/pytest -q
+
+  # The built viewer, published as a branch whose root is the site (index.html), so a
+  # server can fetch prebuilt assets by ref instead of building on the box.
+  frontend-dist:
+    name: Publish viewer ref
+    needs: [validate, server]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile && pnpm build:viewer
+      - name: Push frontend-dist
+        run: |
+          set -euo pipefail
+          mkdir -p site && cp dist/viewer.html site/index.html
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          export GIT_INDEX_FILE="$(mktemp -u)"
+          git --work-tree=site add -A .
+          tree="$(git write-tree)"; unset GIT_INDEX_FILE
+          commit="$(git commit-tree "$tree" -m "viewer build from $(git rev-parse --short HEAD)")"
+          git push -f origin "$commit:refs/heads/frontend-dist"
+
+  # A merge to main releases: publish when package.json carries a version npm does not have yet.
+  publish:
+    name: Publish
+    needs: [validate, server]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - id: version
+        run: |
+          set -euo pipefail
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "${name}@${version}" version >/dev/null 2>&1; then
+            echo "new=false" >> "$GITHUB_OUTPUT"; echo "${name}@${version} already on npm; nothing to publish."
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"; echo "version=${version}" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.version.outputs.new == 'true'
+        run: pnpm install --frozen-lockfile && pnpm build
+      - if: steps.version.outputs.new == 'true'
+        run: pnpm publish --access public --no-git-checks --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - if: steps.version.outputs.new == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}"

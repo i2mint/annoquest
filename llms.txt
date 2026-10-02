@@ -1,0 +1,10 @@
+# annoquest
+
+> Guided annotation requests, agent-first: an agent gives a reader documents plus prioritised items (each anchored to a section or passage, each with a response type such as read / agree / implement / approve / comment); the reader is guided through them in a browser, answers autosave and (with a server) autosubmit; the agent collects an aligned / to-discuss / blocked / waiting summary.
+
+- [README](README.md): install, request JSON, response presets, seams, CLI, server adapter
+- [Agent skill](skills/annoquest/SKILL.md): how to build a good request, step by step
+- [Spec (Zod, source of truth)](src/spec.ts): Request, Item, ResponseType, Responses
+- [Design](docs/design.md): data model, seams and their defaults, surfaces
+- [Server adapter](annoquest_server/README.md): API and storage layout
+- CLI: `annoquest schema` prints the JSON Schema; `annoquest presets` lists response types; every command prints JSON

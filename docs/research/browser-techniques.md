@@ -1,0 +1,353 @@
+# Guided annotation requests: technical research (anchoring, highlighting, attachment, delivery, return, identity, agent surfaces)
+
+Date: 2026-10-02. Scope: the technical seams of an AI-first TypeScript npm package in which an agent builds a Zod-schema'd request (documents + prioritised items, each pointing at a section or a highlight, with a prompt and a response type), a reader opens a link, a guide UI walks them through the items over the document, and responses autosave locally and autosubmit to a configurable sink. Companion to [prior-art.md](prior-art.md). Browser support figures come from MDN browser-compat-data v8.1.4 (2026-10-01) [5] unless stated otherwise; bundle sizes were measured locally (esbuild 0.28.2, ESM, minified, `gzip -9`) on the package versions listed; package versions, licences and publish dates come from the npm registry (2026-10-02). Claims I could not verify from a primary source are marked **(unverified)**.
+
+## Summary and recommendation
+
+1. **Anchoring: own a small anchoring module behind an `anchorer` seam; depend on `approx-string-match` and port Hypothesis's quote matcher.** Store every highlight item as a W3C `TextQuoteSelector` (exact + ~32-char prefix/suffix) plus a `TextPositionSelector` hint, `refinedBy`-scoped to a section `CssSelector`/`FragmentSelector` [1]. Re-anchor in Hypothesis's order: position-then-validate-quote, then exact quote with context, then fuzzy quote scored 50/20/20/2 (quote/prefix/suffix/position) [8][9]. Below a threshold, the item degrades to "section-level, quote drifted" instead of vanishing. Avoid `@apache-annotator/*`: the project was **retired from the Apache Incubator on 2025-08-11** [15], and its text-quote path is 47 KB gzipped. Avoid `dom-anchor-text-quote`: last published 2017, and it splits quotes into 32-char slices to work around diff-match-patch's bitap limit.
+2. **Highlighting: the CSS Custom Highlight API is the default renderer.** It has been Baseline since Firefox 140 (June 2025), alongside Chrome 105 and Safari 17.2 [5][21]. Keep an overlay-rect renderer (from `Range.getClientRects()`) as the fallback and for hit-testing. Avoid `<mark>` wrapping and mark.js (last published 2018, and it mutates the host DOM).
+3. **Attachment: the core is `attach(root, request)` on any DOM root; how the document gets there is an adapter.** The zero-config default for agent-made requests is **`bake`**: the CLI fetches the document in Node, so CORS does not apply, sanitises it, and writes one self-contained HTML file with the overlay and the spec, which any static host can serve. The other adapters are `embed` (a script the document owner includes, as for a technical design document behind a company login), `fetch` (a hosted guide app pulling CORS-enabled or Markdown sources through DOMPurify into a shadow root) and same-origin `frame`. When none of those applies, a `side-by-side` mode opens the original in another tab using `#:~:text=` deep links, which work in all four engines [3][5]. Treat a rewriting proxy as something to study, not build. Avoid bookmarklets, since site CSP blocks them [31]. A browser extension can come later as an adapter.
+4. **Delivery: use two link forms through [holdall](https://github.com/i2mint/holdall)'s link codec, `?spec=<url>` and `#r=z1.<deflate+base64url>`, plus a `specHash`.** Measured on a realistic 250 KB technical document, a deflated spec costs about 200–300 URL characters per item: 5 items come to about 1.6 KB, 20 items to about 4.8 KB, and 50 items to about 10 KB. Outlook breaks links over about 2 KB [34]. So the rule is: inline in the fragment up to about 2 KB (safe to email); above that, use a hosted spec URL. Each reader's link carries an unguessable 128-bit capability token in the **fragment**, following the W3C TAG guidance [36]. QR codes are only for short links.
+5. **Return: local-first outbox, with sinks as adapters.** IndexedDB via holdall envelopes with `navigator.storage.persist()`. Each item's response gets a client UUID, a per-item version, and last-write-wins. Flush on a debounce, on `online`, and on `visibilitychange→hidden` using `fetch(..., {keepalive:true})` or `sendBeacon` (both cap at 64 KiB) [41][42]. Background Sync is Chromium-only, so treat it as an enhancement [5]. **The only way to autosubmit with no configuration and no server we own is a public relay: ntfy.sh with client-side AES-GCM encryption and a random topic.** Its tradeoffs: messages are kept for 12 hours, metadata is visible to the operator, and messages over 4 KB become attachments [46][47]. Every other no-server sink needs a human click: a reply link, mailto, a JSON download, a prefilled GitHub issue, or Web Share.
+6. **Identity: graded, never assumed.** Grade 0 is a name the reader types. Grade 1 is possession of a per-reader link token, with each response HMAC'd under that token so the *requester* can verify it offline [68]. Grade 2 is device continuity: a non-extractable Ed25519 key generated by the reader in WebCrypto (Chrome 137, Firefox 129, Safari 17 [5]). Grade 3 is gateway identity, which the server stamps on each write from a gateway header such as `Remote-User` or `X-Forwarded-User` [55][56][57]. Page JS cannot read request headers, so the server adapter must attribute on write, or expose a same-origin whoami. Without a server you can prove possession of a link and continuity of a device. You cannot prove who a person is.
+7. **Agent surfaces: the core functions are the single source of truth, and the CLI and MCP are thin adapters over them.** The CLI emits JSON on stdout and diagnostics on stderr, runs non-interactively, has stable exit codes and `--dry-run`, and offers `schema` introspection via Zod 4 → JSON Schema. Agent skills ship in `skills/<name>/SKILL.md` per the Agent Skills spec [60], which makes them discoverable by `skills-npm` [62] and `npx skills` [61]. An optional `mcp` subpath uses `@modelcontextprotocol/server` v2, which already depends on Zod 4 [63]. Add an `llms.txt` [64].
+8. **Strict-CSP finding.** A document served behind a company login commonly sends a policy such as `Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'`. That policy blocks cross-origin scripts and cross-origin `fetch` (connect-src falls back to `'self'`). So for such a document, the guide must be **same-origin with the document**: a self-hosted script or a path under the same host. Its sink must also be a **same-origin endpoint**, which means the server-backed adapter, not a public relay such as ntfy.
+
+## 1. Anchoring and selectors
+
+### 1.1 W3C Web Annotation selectors (the vocabulary to adopt)
+
+The W3C Web Annotation Data Model [1] (with the Selectors and States note [2]) defines the vocabulary every serious tool interoperates on. The parts that matter here:
+
+| Selector | Fields | Strength | Weakness | Use in our spec |
+|---|---|---|---|---|
+| `TextQuoteSelector` | `exact` (required), `prefix`, `suffix` (recommended) | Survives insertions elsewhere in the document; human-readable; works across renderings of the same text | Ambiguous for repeated text without context; breaks when the quoted text itself is edited, so fuzzy matching is needed | **Primary** highlight target |
+| `TextPositionSelector` | `start`, `end` (end exclusive), counted in Unicode **code points** of the normalized text | Fast, unambiguous | Breaks on any edit before the span | **Hint only** (disambiguates and speeds up the quote search) |
+| `RangeSelector` | `startSelector`, `endSelector` (same class recommended) | Expresses spans across structural boundaries | Two anchors to keep valid | Not needed in v1; allowed by schema |
+| `CssSelector` / `XPathSelector` | `value` | Addresses a section or element directly | Breaks on structural refactors | **Section** items (`#section-id`), and as the `refinedBy` scope of quotes |
+| `FragmentSelector` | `value`, `conformsTo` (e.g. HTML fragment, Media Fragments, PDF) | Reuses the document's own anchors (`#s-3`) | Only as stable as the document's ids | Section items when the document has stable ids |
+| `refinedBy` | Selector of a selector, so "this quote inside this section" | Shrinks the search scope, which improves both speed and precision | — | **Always**: quote `refinedBy`-scoped to its section |
+
+The spec says that multiple selectors on one target are *equivalent alternatives* that should resolve to the same segment [1]. That is exactly the fallback chain we want. Normalization: the text "MUST be normalized… HTML/XML tags SHOULD be removed, and character entities SHOULD be replaced" [1]. Positions are in code points, but JS strings, `approx-string-match` [10] and the Hypothesis matcher use UTF-16 code units. So either convert, or declare in the schema that positions are code units **(unverified whether Hypothesis and Recogito document this deviation)**. Since positions are only hints, recording `unit: "utf16"` in our own field is enough.
+
+### 1.2 Text Fragments (`#:~:text=`)
+
+Syntax: `#:~:text=[prefix-,]textStart[,textEnd][,-suffix]`, with several directives joined by `&` [3][4]. Matching is case-insensitive. Each component must sit inside a single block-level element. The directive is only activated on user-initiated navigations and only in the main frame, and sites can opt out with `Document-Policy: force-load-at-top` [3].
+
+| Feature (BCD [5]) | Chrome/Edge | Firefox | Safari (macOS/iOS) |
+|---|---|---|---|
+| Text-fragment navigation | 80 | **131** (Oct 2024 [6]) | **16.1** |
+| `::target-text` styling | 89 | 131 | 18.2 |
+| `document.fragmentDirective` (feature detection) | 81 | 131 | 18.4 |
+
+As of 2026 the feature works in all four engines, so it is the right deep link for **"open this passage in the original"**: agent output, emails, and the side-by-side fallback (§3). It is **not** an anchoring engine for us. We cannot read back what the browser matched, there is no fuzzy matching, it cannot be triggered inside iframes, and it requires navigation. `text-fragments-polyfill` (Apache-2.0, v6.7.0, published 2025-11) [7] exports two things worth using. `generateFragmentFromRange()` turns a Range into a fragment (7.3 KB gz) and is useful at authoring time in the browser or in jsdom. `processTextFragmentDirective()` finds a range from a fragment (3.4 KB gz) and could serve as a cheap second matcher.
+
+### 1.3 Libraries
+
+| Library | Licence | Latest / last publish | Size (min+gz, measured) | What it gives | Verdict |
+|---|---|---|---|---|---|
+| `approx-string-match` [10] | MIT | 2.0.0 / 2021-11 | **0.9 KB** | Myers' bit-parallel approximate search [11], `search(text, pattern, maxErrors)` returning `{start,end,errors}` | **Depend.** Small, correct, and the engine under Hypothesis. Stable rather than abandoned: the algorithm is done |
+| Hypothesis client anchoring (`match-quote.ts`, `html.ts`, `types.ts`) [8][9] | BSD-2-Clause | active | n/a (not packaged separately) | Production-proven re-anchoring: order of selectors, quote validation, fuzzy scoring | **Study and port** (about 150 lines, with attribution) |
+| `dom-anchor-text-quote` [12] | MIT | 4.0.2 / **2017-02** | 9.5 KB (pulls in diff-match-patch) | Quote↔Range with diff-match-patch fuzzy search | **Avoid.** Unmaintained. Its own source notes "The DiffMatchPatch bitap has a hard 32-character pattern length limit" and slices the quote into 32-char chunks |
+| `dom-anchor-text-position` [13] | MIT | 5.0.0 / 2020-04 | 1.5 KB | Range↔text offsets | **Study.** Trivial to write with a `TreeWalker`; not worth a dependency |
+| `@apache-annotator/dom` + `/selector` [14] | Apache-2.0 | 0.2.0 / 2021-09 | **47 KB** for the text-quote subset (bundles `@babel/runtime-corejs3`) | W3C-shaped `describeTextQuote`, `createTextQuoteSelectorMatcher` (async generators), `highlightText` | **Avoid.** **Retired from the Incubator 2025-08-11** [15]. Exact-match only (the matcher is "strict character-by-character" [14]), and heavy. Its API shape (describe/match as curried async generators, `refinedBy` composition) is worth **studying** |
+| `text-fragments-polyfill` [7] | Apache-2.0 | 6.7.0 / 2025-11 | 4.2 KB full; 3.4 KB matcher; 7.3 KB generator | Text-fragment parse/match/generate | **Wrap** the generator for deep links; optional |
+| `@recogito/text-annotator` [16] | BSD-3-Clause | 4.3.6 / **2026-10-01** | 22 KB (includes `@annotorious/core`) | Full selection→annotation UI: `SPANS` or `CSS_HIGHLIGHTS` renderers, W3C adapter, `annotatingEnabled`, read-only mode | **Study / optional adapter.** Its selector is `{quote, start, end}` revived by offsets, with no fuzzy re-anchoring. It solves *free-form* annotation, where the reader selects text. Our items are *agent-placed*; the reader responds, and free selection is a v2 "add your own comment" feature |
+| `diff-match-patch` [17] | Apache-2.0 | 1.0.5 / 2020 | 6.6 KB | Bitap match, diff, patch | **Avoid** for anchoring (32-char pattern cap); keep in mind for diffing document versions |
+
+### 1.4 Robust re-anchoring when the document is edited
+
+Research basis: Brush et al. studied what users expect when annotated documents change [18]. Users want an annotation to follow its text through small edits, and would rather be *told* it is orphaned than have it silently re-attached somewhere wrong. Phelps and Wilensky's "robust locations" combine several descriptors (id, tree path, context) so that one can fail without losing the anchor [19]. Hypothesis is the production embodiment of both ideas. Its anchoring (read from source [8][9]):
+
+1. **Order:** `RangeSelector` (XPath), then `TextPositionSelector`, then `TextQuoteSelector`. The position's `start` is passed as the quote matcher's `hint`.
+2. **Validation:** a range found by Range or Position is *rejected* unless `range.toString() === quote.exact` (`maybeAssertQuote`). The cheap selectors are trusted only when the quote confirms them.
+3. **Quote matching:** try an exact `indexOf` first. Otherwise run `approx-string-match` with `maxErrors = min(256, quote.length / 2)`, then score each candidate as `(50·quoteScore + 20·prefixScore + 20·suffixScore + 2·positionScore) / 92`, where each text score is `1 − errors/length`. Position is only a tie-breaker.
+
+Recommended algorithm for our `anchorer` (the default implementation behind the seam):
+
+| Step | Action | On failure |
+|---|---|---|
+| 0 | Resolve the **scope**: the section from `refinedBy` (`CssSelector` / `FragmentSelector` id). If it is missing, the scope is the whole document | Use the whole document; flag `scopeLost` |
+| 1 | Position hint inside the scope; accept if the text equals `exact` | Next |
+| 2 | Exact `exact` search in the scope; if several hits, disambiguate by prefix/suffix, then by distance to the hint | Next |
+| 3 | Fuzzy: `approx-string-match` with Hypothesis's thresholds and weights; accept if score ≥ τ (start τ≈0.75, configurable) | Next |
+| 4 | Retry 2–3 over the whole document (the section may have moved or been renamed) | Next |
+| 5 | **Degrade**: show the item at section level with the original quote rendered as a block quote and a "this passage changed" badge; record `anchorStatus: "orphaned"` | — |
+
+Store `anchorStatus` (`exact | fuzzy | relocated | orphaned`) and a score with every response, so the requester knows which answers were given against drifted text. Also store a **document fingerprint**: a SHA-256 of the normalized text, plus an optional section hash. When it matches, step 1 always wins; when it does not, the guide can say "the document changed since this request was made". The `bake` adapter (§3) removes drift altogether by freezing the version being reviewed, which suits sign-off use cases.
+
+Authoring side (the agent): the CLI resolves each item's target against the document **at creation time** and fails loudly if a quote is ambiguous (more than one exact match with no disambiguating context) or not found. That is the immediate-error-feedback rule applied to agents: a request with a dangling anchor never ships. Choose the context length by growing prefix/suffix until the match is unique, which is what Apache Annotator's `describeTextQuote` does [14]. Default 32 characters, at least the minimum unique length.
+
+## 2. Highlighting
+
+| Approach | How | DOM mutation | Overlap | Performance | Support 2026 | Verdict |
+|---|---|---|---|---|---|---|
+| **CSS Custom Highlight API** | `CSS.highlights.set(name, new Highlight(...ranges))`; style with `::highlight(name)` [20][22] | **None** (Ranges only) | Native (multiple named highlights, `priority`) | Best: no layout from new nodes, no re-render when the host framework re-renders, as long as Ranges stay valid | `HighlightRegistry`: Chrome 105, Safari 17.2, **Firefox 140** (2025-06) [5][21]. `::highlight` Baseline since Firefox 140, with notes: Firefox <146 had no `text-decoration`, <149 no `text-shadow`; Safari ignores it under `user-select:none` [5] | **Default renderer** |
+| Overlay rectangles | `range.getClientRects()` → absolutely positioned divs in an overlay layer; recompute on resize/scroll/mutation | None in the content; one overlay layer | Easy (stack rects) | Recompute cost on layout changes; can drift during animations | Universal | **Fallback** renderer, and for **hit-testing** (`HighlightRegistry.highlightsFromPoint` is Chrome 140 / Firefox 150 only, not Safari [5]) and for drawing item badges and margin markers |
+| `<mark>` / span wrapping (mark.js [23], Recogito `SPANS`) | Split text nodes, wrap in elements | **Yes** | Nested spans get messy | Fine for small docs; fights frameworks (React re-renders erase wraps), breaks Range-based selectors held elsewhere | Universal | **Avoid** as default; mark.js last published 2018. Acceptable only in the `bake` adapter if a print-friendly static highlight is wanted |
+
+Recommendation: a `renderer` seam with `cssHighlights` as the default and `overlayRects` as the fallback, chosen by feature detection (`'highlights' in CSS`). Use one named highlight per *state* (`ar-pending`, `ar-current`, `ar-answered`, `ar-orphaned`), not per item, so styling stays declarative. Map priority to visual weight on the item list and margin markers rather than on the text itself, so the text does not turn into confetti. Style highlights with `background-color` only, which works in every engine and release. Click detection: a single `click` listener on the root converts the caret position (`document.caretPositionFromPoint`, or `caretRangeFromPoint` on WebKit) to an offset and looks it up in the anchored items' interval index, which works without `highlightsFromPoint` **(unverified across all engines; test in Safari)**.
+
+## 3. How the guide attaches to a document
+
+The decisive architectural move: the **overlay runtime** needs only a DOM root (`Node`) and the request. Every approach below is just a different way of getting a root. So the core never changes when an adapter is added, which is the "would this surface need the core to change?" test.
+
+| # | Approach | Who acts | Works for arbitrary docs? | Auth-gated docs? | Fidelity | Persistence/sink constraints | Verdict |
+|---|---|---|---|---|---|---|---|
+| a | **Script tag / embed** in the document (Hypothesis's `embed.js` + `js-hypothesis-config` model [28][29]) | Document owner adds one tag | No (owner must cooperate) | **Yes**: runs inside the authenticated page | Perfect (the real page) | Same-origin storage; **CSP of the host applies** (under a strict CSP the script must be self-hosted and `fetch` is same-origin only) | **Adapter `embed`**; the right one for any document we control |
+| b | **iframe** loaded by the guide app | Guide host | Only **same-origin** docs give DOM access. Cross-origin frames are opaque (SOP [25]); `document.domain` relaxation is off by default since Chrome 106 (origin-keyed agent clusters [26]); the doc may forbid framing (`frame-ancestors` [27]) | Same-origin only (e.g. guide served under the doc's host) | Perfect | Two documents to coordinate; text fragments do not work inside frames [3] | **Adapter `frame`**, same-origin only |
+| c | **Fetch + sanitize + render** (DOMPurify [24] into a shadow root, `<base href>` rewritten) | Guide app at runtime | Only when the source sends CORS headers (`raw.githubusercontent.com` and gists send `Access-Control-Allow-Origin: *`, observed) or is same-origin; most websites do not | Only with credentials and CORS allowed by that server | Good for content documents; loses site JS, and some CSS may be lost | Guide origin's storage; any sink | **Adapter `fetch`**. Ideal for Markdown/HTML in repos and for document adapters (md→HTML, PDF text later) |
+| d | **Rewriting reverse proxy** (Hypothesis Via: pywb rewrites the page and injects the client [30]) | A server we run | Mostly (site JS can break; heavy) | **No** (the proxy has no user session), unless the proxy is the gateway itself | Medium | Server owned by us; legal/abuse surface (an open proxy) | **Study / avoid** for v1 |
+| e | **Bookmarklet / browser extension** | Reader installs something | Bookmarklets are blocked by `script-src` CSP on many sites [31] (a strict CSP would block an external script); extensions bypass CSP | Extension: yes | Perfect | Extension storage; any sink | Bookmarklet: **avoid**. Extension: **later adapter** (high friction for a one-off reviewer) |
+| f | **Static bake**: CLI snapshots the doc and writes one HTML with overlay + spec | Agent (CLI, in Node, so no CORS) | **Yes** for anything the agent can fetch or read (URLs, local files, Markdown, auth via cookies/headers passed to the CLI) | Yes, if the CLI is given credentials; output is then itself confidential | High for content; frozen in time (a feature for sign-off: no drift, exact version recorded) | Must be hosted somewhere (any static host, GitHub Pages) or opened as a file; `file://` origins have quirky storage | **Default for agent-generated requests** |
+| g | **Side-by-side** (no attachment): guide shows items; each item opens the original at `#:~:text=` | Nobody | **Always** | Yes (reader's own session opens the doc) | No in-document highlights or guidance; the browser's own fragment highlight only | Guide origin's storage | **Automatic fallback** when nothing else applies |
+
+**Recommended default and negotiation.** The CLI's `create` defaults to **`bake`**. It is the only approach that needs no cooperation from the document's owner, no CORS, and no server, and it records exactly which version was reviewed (the document hash goes in the spec). The hosted guide app (`guide.html?spec=…`) negotiates in this order at runtime: `embed` (already inside the document) → same-origin `frame` → `fetch` (CORS probe) → `side-by-side`. It tells the reader which mode it is in, with no silent downgrade. Wire all adapters behind a `DocumentSource` seam: `{ kind, load(): Promise<{root: Node, fingerprint, baseUrl}> }`. Later document adapters (Markdown, PDF via pdf.js text layer, Google Docs export) plug in there, not in the core.
+
+**Worked example: a document behind a company login.** Suppose a technical design document is served behind a forward-auth gateway (401 when anonymous) with a CSP of `default-src 'self'; script-src 'self' 'unsafe-inline'` (illustrative; the CSP of the authenticated response must be checked, since it may differ from the anonymous one). Then either the document includes a self-hosted `embed` script, or the guide is served from a path on the same host. In both cases the overlay runs same-origin, and the sink must be a same-origin endpoint of the server adapter.
+
+## 4. Request delivery seams
+
+### 4.1 Measured payload sizes
+
+A realistic spec: one document; each item has a 140-char prompt, a 90-char quote, and 32-char prefix and suffix, all sliced from a realistic 250 KB technical document. Encoded the way holdall's codec does it (`z1` = raw DEFLATE level 9 via fflate, then base64url [65]; `j1` = JSON in base64url):
+
+| Items | JSON chars | base64url(JSON) | lz-string `compressToEncodedURIComponent` | **DEFLATE + base64url** |
+|---|---|---|---|---|
+| 5 | 2,254 | 3,024 | 2,029 | **1,564** |
+| 20 | 8,654 | 11,620 | 6,207 | **4,806** |
+| 50 | 21,505 | 28,858 | 13,537 | **10,406** |
+| 20 + responses | 12,931 | 17,347 | 9,039 | **6,924** |
+| 50 + responses | 32,202 | 43,120 | 19,525 | **14,703** |
+
+DEFLATE beats lz-string by 25–30% on real prose. `CompressionStream('deflate-raw')` produced byte-identical sizes and is native everywhere (Chrome 80, Firefox 113, Safari 16.4 [5][39]), but it is async. fflate (MIT, 4.1 KB gz for deflate+inflate [38]) is sync, and holdall already uses it. **Verdict: depend on holdall's link codec (fflate) and avoid lz-string** (MIT, 1.7 KB gz [37]): it is smaller code but makes 30% longer links, and it is a second codec to support. The test synthesis shows that text from a small vocabulary compresses several times better, so do not trust compression ratios measured on lorem-ipsum.
+
+### 4.2 Practical URL length limits
+
+| Context | Practical limit | Source |
+|---|---|---|
+| Chromium | 2 MiB (`kMaxURLChars`; longer URLs become invalid over IPC); omnibox displays up to 32 KB | [33] |
+| Firefox | ~65,536 chars displayed; longer works programmatically **(unverified; secondary source)** | [35] |
+| Safari | ~80,000 chars **(unverified; secondary source)** | [35] |
+| Outlook (desktop) | **~2,048 chars**; longer links get truncated and unusable | [34] |
+| Slack message | ~40,000 chars per message (a long link survives but is ugly) **(secondary source)** | — |
+| WhatsApp | 65,536 chars per message **(secondary source)** | — |
+| Servers (if the payload is in the query) | nginx default 4–8 KB header buffers, Apache 8,190 `LimitRequestLine` | [35] |
+| QR code | 2,953 bytes at version 40-L [40]; practically scannable from a screen or paper up to **~300–500 chars** **(unverified rule of thumb)** | [40] |
+
+Fragments never reach the server, so server limits do not apply to `#…`. Email clients and humans are the binding constraint.
+
+### 4.3 Options
+
+| Seam | Form | Pros | Cons | Verdict |
+|---|---|---|---|---|
+| Query params pointing at resources | `/guide?doc=<url>&spec=<url>` | Short; cacheable; the spec can be edited after sending | Needs the spec hosted somewhere (gist / raw GitHub work via CORS `*`; any static host); query strings are logged by servers and leak via `Referer` | **Default for large specs**; params are `spec` (required) and optional `doc` overrides |
+| Spec inline in the fragment | `/guide#r=z1.<payload>` | No hosting; the fragment is not sent to servers or logged, and is stripped from Referer [36] | Size (above); immutable (a correction means a new link); readable by any script on the page; lives in history | **Default for small specs (≤ ~2 KB, email-safe)**; the CLI picks automatically and reports the length |
+| Spec URL + integrity | `?spec=<url>#h=<sha256>` | Detects a tampered or edited hosted spec | Must re-issue the link on legitimate edits | **Always add** `specHash` when a spec is hosted |
+| Capability URL (per reader) | `…#k=<128-bit token>` | Unguessable access + attribution (§6); revocable on a server; W3C TAG: ≥120 bits entropy, HTTPS, expiry, revocation, `noindex`, no third-party scripts, secret in the fragment if Referer could leak it [36] | Without a server it cannot expire or be revoked; forwarding the link forwards the capability | **Yes**: one link per reader, token in the fragment |
+| Magic link (email → session) | Server sends a one-time login link | Real identity at email level | Requires a server, mail sending, sessions | **Server adapter only** (a forward-auth gateway already covers named accounts) |
+| QR code | Encodes any of the above | Phone hand-off in meetings | Only short links; inline specs rarely fit | **Optional helper** (`lean-qr`, MIT, 3.6 KB gz, or `uqr`) on hosted-spec links only |
+| Baked page URL | `https://host/…/request-abc.html` | One link, works everywhere | Hosting step | **Default output of `bake`**: the link *is* the request |
+
+Recommendation: a `Delivery` seam whose implementations are `inline` (fragment), `hosted` (spec URL + hash), and `baked` (page URL). The CLI `link` command chooses by size: inline if ≤ 2,000 chars, else hosted, else bake. It always prints `{url, length, mode, fitsEmail, fitsQr}` as JSON so the agent can decide how to send it. Sending stays outside the package: hand the URL to [correspond](https://github.com/thorwhalen/correspond) (email, GitHub, Telegram, ntfy) or to the human.
+
+## 5. Return of annotations and autosubmit
+
+### 5.1 Local-first, always
+
+| Concern | Mechanism | Notes |
+|---|---|---|
+| Never lose typing | Debounced autosave (~300–800 ms) of a per-request envelope to IndexedDB (holdall `autosave`/`envelope`); `localStorage` only for a tiny "last request" pointer | holdall already provides envelopes, autosave and durability helpers |
+| Eviction | `navigator.storage.persist()` (Chrome 55, Firefox 57, Safari 15.2 [5]); Safari 17 quotas up to 60% of disk per origin, LRU eviction, ITP may evict sites not interacted with [44]. Safari's 7-day cap on script-writable storage for sites without user interaction [45] is benign here because the reader interacts, but a request left unopened for weeks is a fresh start, which is fine since the spec is in the link | Show "saved on this device" plus "last sent at …" so the reader trusts it |
+| Ids | `crypto.randomUUID()` per response; `requestId`, `itemId`, `readerId`; per-item monotonically increasing `rev` + `updatedAt` (HLC string if multi-device later) | holdall's sync-later guidance ("six cheap habits") |
+| Conflict policy | **Last-write-wins per item** by `(rev, updatedAt)`; the sink stores the full op log, so nothing is destroyed | One reader per request in v1; LWW is correct for a single author |
+| Idempotency | Each submission is a batch of `{responseId, itemId, rev, value}` ops; the sink de-duplicates on `(responseId, rev)`. HTTP sinks also send `Idempotency-Key` [66] | Retries are safe by construction |
+
+### 5.2 Getting it off the device
+
+| Mechanism | Limits | Support | Use |
+|---|---|---|---|
+| `fetch` POST + **outbox** queue (retry with exponential backoff + jitter; flush on `online`, on focus, on each debounce) | — | universal | **Primary transport** of every HTTP sink |
+| `fetch(..., {keepalive:true})` on `visibilitychange→hidden` | 64 KiB in-flight keepalive budget (Fetch spec) [42] **(budget figure from the Fetch spec, not re-verified)** | Chrome 66, Firefox **133**, Safari 13 [5] | Final flush when the tab is hidden; supports headers (auth, idempotency) |
+| `navigator.sendBeacon` | ~64 KiB; POST only; no custom headers; returns false if it cannot queue [41] | universal | Fallback final flush. Use `visibilitychange` (`pagehide` as backup), never `unload` (unreliable and breaks bfcache) [41][67] |
+| `fetchLater()` | deferred until page teardown | **Chrome 135 only** [5] | Progressive enhancement, later |
+| Background Sync (`SyncManager`) | needs a service worker | **Chromium only**; not Firefox or Safari [5][43] | Enhancement, not a dependency |
+
+Keep payloads under 64 KiB by sending **deltas** (changed items since the last acknowledged `rev`), not the whole envelope.
+
+### 5.3 Sinks that need no server of ours
+
+| Sink | Automatic? | Config needed | Privacy | Limits / caveats | Verdict |
+|---|---|---|---|---|---|
+| **Local only** (+ "Export") | — | none | perfect | Requester never gets it unless the reader acts | Always on (the outbox's source of truth) |
+| **Reply link** (responses in a fragment; Web Share on mobile, copy on desktop) | No (one click) | none | Good (fragment; the channel used to send it sees it) | ~250–300 chars per answered item (measured); long reviews exceed email limits | **Default manual sink**; it is also the holdall pattern |
+| **Download JSON** | No | none | perfect | Reader must send the file | Always available |
+| **mailto:** with a reply link or summary in the body [52] | No (opens mail client) | Requester's address | Mail provider | Body practically ~2 KB in Outlook-class clients [34]; percent-encoding inflates non-ASCII | Offer when the requester gives an email |
+| **Prefilled GitHub issue** `issues/new?title=&body=` [50] | No (reader clicks Submit) | repo | Public unless the repo is private; reader needs a GitHub account | URL too long → `414` [50]; labels need triage permission | Good for developer-to-developer requests |
+| **Web Share API** | No | none | Channel-dependent | Desktop Firefox behind a flag; Chrome desktop 128+, Safari 12.1+ [5][53] | Transport for the reply link on mobile |
+| **ntfy.sh** POST (CORS `*`, observed) | **Yes** | **none** (topic generated by the agent) | Topic name = password [46]; operator sees IP, timing, size, and plaintext **unless we encrypt** (no built-in E2E; open issue [49]); messages also go to Firebase (FCM) [47] | 4,096-byte message cap, larger becomes an attachment (15 MB, 3 h expiry) [46]; **12 h cache** [47], so the collector must poll within that window (`/json?poll=1&since=all` [48]); public rate limits (burst 60 requests, then one per 5 s per visitor **(from config docs, unverified for ntfy.sh)**) | **The only true zero-config autosubmit.** Use only with client-side encryption |
+| Formspree / form backends | Yes | Account + form id | Third party stores plaintext | Free tier 50 submissions/month [51] | **Adapter** for people who already use one; not a default |
+| Discord/Slack webhook from the browser | Yes | Webhook URL **embedded in the link** (anyone with the link can post) | Third party | CORS and spam exposure **(unverified per provider)** | **Avoid** as a default |
+| Server-backed adapter | Yes | Gateway + per-record app state | Ours; identity stamped server-side | Must be same-origin under a strict CSP | **The production adapter** |
+
+**What "zero config, no server owned by us, automatic" honestly means.** The only option is a public relay, ntfy.sh. Make it acceptable by construction:
+
+1. Use a random 128-bit topic per request (or per reader), never a guessable one.
+2. Encrypt every message with AES-GCM under a 256-bit key that lives **only in the link fragment** (holdall reserves an `e1` codec for exactly this). ntfy then carries ciphertext plus metadata.
+3. Collect promptly. The CLI `collect` polls with `since=<last id>`, so the 12-hour cache is a delivery window, not storage, and the reader's device stays the source of truth: it re-sends unacknowledged ops when the page is next opened.
+4. State the residual risk in the README and in the reader UI ("answers are relayed encrypted through ntfy.sh"). The operator learns IP addresses, timing and sizes, and the service can be down or rate-limited.
+
+Open question: should the **CLI default** be `--sink ntfy` (encrypted autosubmit, zero config), or `--sink reply-link` (no third party, one click)? The recommendation is `ntfy` encrypted by default, because the design goal prefers autosubmit, and `reply-link` is always available as well. For confidential documents behind a strict CSP the question does not arise: the CSP forces the same-origin server sink.
+
+## 6. Identity without a server
+
+| Grade | Mechanism | What it proves | Verifiable by | Needs a server? |
+|---|---|---|---|---|
+| 0 Self-declared | Reader types a name once (stored locally); the spec may pre-fill an expected name per link | Nothing | — | No |
+| 1 Link possession | Agent mints one link per reader with a random `readerKey` (128–256 bits) in the fragment; every submitted batch carries `mac = HMAC-SHA256(readerKey, canonicalJSON(batch))` [68] | "Written by someone holding Alice's link" (not "by Alice": links get forwarded) | **The requester**, offline: the agent kept the keys when it minted the links | No |
+| 2 Device continuity | On first open the reader's browser generates a **non-extractable Ed25519** key in WebCrypto (Chrome 137, Firefox 129, Safari 17 [5][54]) stored in IndexedDB; batches are signed and include the public key | All batches came from the same browser profile (trust on first use) | Anyone holding the public key | No |
+| 2' Requester-signed request | Agent signs the spec with its Ed25519 key; the guide verifies against a pinned key | The request was not tampered with | The reader's guide, **only if** the public key is pinned outside the link (e.g. built into a deployed guide) | No |
+| 3 Gateway identity | Forward-auth gateway authenticates and injects a user header, for example Authelia's `Remote-User`/`Remote-Email`/`Remote-Groups` [56], oauth2-proxy's `X-Forwarded-User` (`--pass-user-headers`) / `X-Auth-Request-User` (`--set-xauthrequest`) [57], copied by Caddy `forward_auth copy_headers` [55] | A named account wrote it | The server | **Yes** |
+
+Important constraints for the server adapter:
+
+1. **Browser JS cannot read the request headers the gateway injected.** So the client must never *claim* identity. The sink endpoint, behind the same gateway, stamps `author` from the gateway's user header on each write, and that stamp is authoritative. For display ("signed in as Alice") the adapter calls a same-origin whoami endpoint. A whoami endpoint that returns 200 with nulls when anonymous is fine for display, never a gate.
+2. Downstream apps must **strip client-supplied copies** of the identity header. A correctly configured gateway already does this.
+
+These grades line up with `correspond`'s authenticity grades (`platform`, `crypto`, `bound`, `domain`): store `{grade, evidence}` on every response, not a bare `author` string.
+
+What cannot be had without a server: real-world identity; revocation or expiry of a link; trustworthy timestamps (client clocks lie, so record `receivedAt` at the sink when one exists); non-repudiation against the reader (their link may have been forwarded).
+
+## 7. Agent-facing surfaces
+
+### 7.1 CLI (the primary agent surface)
+
+Practices with consensus across clig.dev [58], Anthropic's tool-design guidance [59] and the agentic-CLI skills circulating on skills registries:
+
+| Practice | Concretely |
+|---|---|
+| Machine output | `--json` on every command (or JSON by default when stdout is not a TTY); stdout carries data only, stderr carries diagnostics |
+| Non-interactive | Never prompt; every input is a flag or a file/stdin (`--spec -`); `--yes` is never needed because nothing asks |
+| Stable errors | Documented exit codes (e.g. 0 ok, 2 usage, 3 validation, 4 anchor-not-found, 5 sink unreachable); a JSON error object `{code, message, hint, path}` with an *actionable* hint [59] |
+| Dry-run | `--dry-run` on anything that writes or sends (`create`, `link`, `bake`, `collect --ack`) prints the plan |
+| Introspection | `schema [--command X]` prints JSON Schema generated from the Zod schemas (Zod 4 `z.toJSONSchema`), so the spec format has one source of truth; `--help --json` |
+| Validation first | `validate <spec>` resolves every anchor against the document(s) and reports `{itemId, status, matches, suggestion}`; ambiguous quotes fail with the extra context needed |
+| Token economy | `inspect` / `collect` default to concise summaries (counts per status, per priority) and accept `--detail`, pagination, field selection [59] |
+| Idempotent | `create --id` with the same input yields the same request; `collect` is safe to re-run (cursor stored) |
+
+Suggested verbs: `create`, `validate`, `link`, `bake`, `inspect`, `collect`, `export` (W3C Web Annotation JSON-LD, so responses interoperate with Hypothesis/Recogito tooling), `schema`. CLI framework: `commander` (MIT, v15, 2026-05) or `citty`/`cac`; any of them is fine because the CLI is a thin adapter over core functions.
+
+### 7.2 Agent skills shipped in the npm package
+
+The Agent Skills spec [60]: a directory per skill with `SKILL.md`. Frontmatter `name` is 1–64 chars of lowercase alphanumerics and single hyphens, and must match the directory; `description` is ≤1024 chars and says what and when; optional `license`, `compatibility`, `metadata`, `allowed-tools`. Optional `scripts/`, `references/`, `assets/`. Keep the body under 500 lines / ~5k tokens and move depth into references (progressive disclosure). For npm packages the de facto convention is a top-level `skills/` directory in the published tarball. `skills-npm` (antfu, MIT, v4.0.0 2026-09) scans `skills/`, `dist/skills/` and `.agents/skills/` of dependencies and symlinks them into `.agents/skills` and agent-specific dirs [62]. Vercel's `npx skills add <pkg|repo>` installs from repos and packages [61]. holdall already ships `skills/` this way. **Verdict:** ship `skills/<pkg>/SKILL.md` (making a request), `skills/<pkg>-collect/` (collecting and interpreting responses), `skills/<pkg>-sinks/` (choosing delivery/sink/identity). Include `skills` in `package.json#files`. Validate with `skills-ref validate` [60].
+
+### 7.3 MCP server
+
+`@modelcontextprotocol/sdk` v1 is superseded. The TypeScript SDK v2 is split into `@modelcontextprotocol/server` / `client` / `core` (MIT, 2.2.0, 2026-09-28), implements the 2026-07-28 spec, and depends on `zod ^4.2` [63]. Our tool input schemas can therefore *be* the request's Zod schemas, with no second schema. **Verdict:** wrap, as an optional `./mcp` subpath export plus a `mcp` CLI subcommand (stdio). The MCP SDK must stay out of the browser bundle (subpath exports + `sideEffects:false`). Tools mirror the CLI verbs. Following [59], consolidate them: one `create_request` that validates and returns the link, rather than separate create/validate/link calls.
+
+### 7.4 llms.txt
+
+The llms.txt proposal (Jeremy Howard, 2024; still the convention in 2026 [64]): `/llms.txt` with an H1, a blockquote summary, then H2 sections of links to Markdown docs, plus an `Optional` section. **Verdict:** ship `llms.txt` at the docs-site root and in the package root (pointing at README, the spec schema, and the skills), and generate it from the same sources as the README to avoid drift.
+
+## 8. Consolidated dependency verdicts
+
+| Package | Licence | Size (gz) | Verdict | Role |
+|---|---|---|---|---|
+| `zod` 4.x | MIT | — | Depend | Spec SSOT; JSON Schema export; MCP tool schemas |
+| `holdall` | MIT | — | Depend | Link codec (fflate), envelopes, autosave, durability, reserved `e1` encrypted codec |
+| `fflate` (via holdall) | MIT | 4.1 KB | Depend (transitively) | DEFLATE for links |
+| `approx-string-match` | MIT | 0.9 KB | Depend | Fuzzy quote search |
+| Hypothesis anchoring code | BSD-2-Clause | — | Study + port with attribution | Re-anchoring algorithm |
+| `dompurify` | MPL-2.0 OR Apache-2.0 | 11.6 KB | Depend (in `fetch` and `bake` adapters only) | Sanitizing foreign HTML; the native `Element.setHTML` Sanitizer exists in Chrome 146 / Firefox 148 but **not Safari** [5][32], so it is not yet a replacement |
+| `text-fragments-polyfill` (generation utils) | Apache-2.0 | 7.3 KB | Wrap (authoring/CLI side; lazy in browser) | `#:~:text=` deep links |
+| `idb-keyval` | Apache-2.0 | 0.4 KB | Optional (if holdall does not already cover IndexedDB) | Outbox store |
+| `lean-qr` | MIT | 3.6 KB | Optional, lazy | QR for short links |
+| `@modelcontextprotocol/server` v2 | MIT | n/a (Node only) | Wrap (subpath) | MCP surface |
+| `@recogito/text-annotator` | BSD-3-Clause | 22 KB | Study; possible v2 adapter for free-form reader highlights | — |
+| `@apache-annotator/*` | Apache-2.0 | 47 KB | Avoid (retired 2025-08) | Study the API shape |
+| `dom-anchor-text-quote`, `mark.js`, `diff-match-patch`, `lz-string` | MIT / MIT / Apache-2.0 / MIT | 9.5 / 6.2 / 6.6 / 1.7 KB | Avoid | Superseded by the above |
+
+Estimated viewer payload for the default path (core + approx-string-match + holdall/fflate + CSS highlights, no DOMPurify in `embed` mode): well under 30 KB gz before UI code **(estimate, not measured as a whole)**.
+
+## 9. Seams this research implies (for the design note)
+
+| Seam (one keyword argument each) | Default (strongest with no new dependency) | Adapters with a known replacement |
+|---|---|---|
+| `anchorer` | W3C quote + position + section scope; Hypothesis-style fuzzy | Recogito-backed; PDF text-layer anchorer |
+| `renderer` | CSS Custom Highlight API | Overlay rects (auto-fallback); `<mark>` for static/print |
+| `documentSource` | `bake` (CLI) / negotiated `embed → frame → fetch → side-by-side` (runtime) | Markdown, PDF, Google Docs export |
+| `delivery` | `inline` ≤ 2 KB, else `hosted` | `baked` page URL; QR |
+| `store` (local) | IndexedDB envelope via holdall | Origin-private FS; server mirror |
+| `sink` | Reply link (library) / encrypted ntfy (CLI; open question, see section 5.3) | Server adapter (behind a forward-auth gateway, same-origin), Formspree, GitHub issue, mailto, download |
+| `identity` | Grade 0 + grade 1 (per-reader link HMAC) | Grade 2 device key; grade 3 gateway header (server-stamped) |
+
+## REFERENCES
+
+1. [W3C. Web Annotation Data Model (Recommendation, 2017)](https://www.w3.org/TR/annotation-model/)
+2. [W3C. Selectors and States (Working Group Note)](https://www.w3.org/TR/selectors-states/)
+3. [MDN. Text fragments](https://developer.mozilla.org/en-US/docs/Web/URI/Reference/Fragment/Text_fragments)
+4. [WICG. URL Fragment Text Directives (scroll-to-text-fragment)](https://wicg.github.io/scroll-to-text-fragment/)
+5. [MDN browser-compat-data, v8.1.4 (2026-10-01), queried locally](https://github.com/mdn/browser-compat-data)
+6. [web.dev. New to the web platform in October 2024 (Firefox 131 text fragments)](https://web.dev/blog/web-platform-10-2024)
+7. [GoogleChromeLabs. text-fragments-polyfill](https://github.com/GoogleChromeLabs/text-fragments-polyfill)
+8. [Hypothesis client. src/annotator/anchoring/match-quote.ts](https://github.com/hypothesis/client/blob/main/src/annotator/anchoring/match-quote.ts)
+9. [Hypothesis client. src/annotator/anchoring/html.ts](https://github.com/hypothesis/client/blob/main/src/annotator/anchoring/html.ts)
+10. [Knight R. approx-string-match-js](https://github.com/robertknight/approx-string-match-js)
+11. [Myers G. A fast bit-vector algorithm for approximate string matching based on dynamic programming. J ACM. 1999;46(3):395–415](https://doi.org/10.1145/316542.316550)
+12. [tilgovi. dom-anchor-text-quote](https://github.com/tilgovi/dom-anchor-text-quote)
+13. [tilgovi. dom-anchor-text-position](https://github.com/tilgovi/dom-anchor-text-position)
+14. [Apache Annotator. Getting started / dom module API](https://annotator.apache.org/docs/getting-started)
+15. [Apache Incubator. Annotator project status (retired 2025-08-11)](https://incubator.apache.org/projects/annotator.html)
+16. [Recogito. text-annotator-js](https://github.com/recogito/text-annotator-js)
+17. [Google. diff-match-patch](https://github.com/google/diff-match-patch)
+18. [Brush AJB, Bargeron D, Gupta A, Cadiz JJ. Robust annotation positioning in digital documents. CHI 2001:285–292](https://www.microsoft.com/en-us/research/publication/robust-annotation-positioning-in-digital-documents/)
+19. [Phelps TA, Wilensky R. Robust intra-document locations. Computer Networks 2000;33(1–6):105–118](https://ftp.math.utah.edu/pub/tex/bib/idx/compnetamsterdam2000/33/1/105_118.html)
+20. [MDN. CSS Custom Highlight API](https://developer.mozilla.org/en-US/docs/Web/API/CSS_Custom_Highlight_API)
+21. [MDN. Firefox 140 release notes for developers](https://developer.mozilla.org/en-US/docs/Mozilla/Firefox/Releases/140)
+22. [Frontend Masters. Using the Custom Highlight API](https://frontendmasters.com/blog/using-the-custom-highlight-api/)
+23. [julmot. mark.js](https://github.com/julmot/mark.js)
+24. [cure53. DOMPurify](https://github.com/cure53/DOMPurify)
+25. [MDN. Same-origin policy](https://developer.mozilla.org/en-US/docs/Web/Security/Same-origin_policy)
+26. [Chromium. document.domain setting is deprecated (origin-keyed agent clusters by default from M106)](https://chromium.googlesource.com/chromium/src/+/main/docs/security/document-domain.md)
+27. [MDN. CSP frame-ancestors](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/frame-ancestors)
+28. [Hypothesis. How to add Hypothesis to your website (embed.js)](https://h.readthedocs.io/projects/client/en/latest/publishers/embedding.html)
+29. [Hypothesis. Configuring the client](https://h.readthedocs.io/projects/client/en/latest/publishers/config.html)
+30. [pywb. Rewriter documentation (live-web rewriting proxy used by via.hypothes.is)](https://pywb.readthedocs.io/en/latest/manual/rewriter.html)
+31. [Mozilla Bugzilla 866522. Bookmarklets affected by CSP](https://bugzilla.mozilla.org/show_bug.cgi?id=866522)
+32. [MDN. HTML Sanitizer API](https://developer.mozilla.org/en-US/docs/Web/API/HTML_Sanitizer_API)
+33. [Chromium. url/mojom/url.mojom (kMaxURLChars = 2 MiB)](https://chromium.googlesource.com/chromium/src/+/main/url/mojom/url.mojom)
+34. [Suped. How URL length in an email href affects delivery and rendering (Outlook ~2,048)](https://www.suped.com/knowledge/email-deliverability/technical/how-does-url-length-in-an-email-href-affect-email-delivery-and-rendering)
+35. [Baeldung. Maximum URL length (secondary; browser and server limits)](https://www.baeldung.com/cs/max-url-length)
+36. [W3C TAG. Good Practices for Capability URLs](https://www.w3.org/2001/tag/doc/capability-urls/)
+37. [pieroxy. lz-string](https://github.com/pieroxy/lz-string)
+38. [101arrowz. fflate](https://github.com/101arrowz/fflate)
+39. [MDN. CompressionStream](https://developer.mozilla.org/en-US/docs/Web/API/CompressionStream)
+40. [Keyence. What is a QR code? (capacity: 2,953 bytes at version 40)](https://www.keyence.com/ss/products/auto_id/codereader/basic_2d/qr.jsp)
+41. [MDN. Navigator.sendBeacon()](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/sendBeacon)
+42. [MDN. RequestInit keepalive](https://developer.mozilla.org/en-US/docs/Web/API/RequestInit#keepalive)
+43. [MDN. Background Synchronization API](https://developer.mozilla.org/en-US/docs/Web/API/Background_Synchronization_API)
+44. [WebKit. Updates to Storage Policy (Safari 17)](https://webkit.org/blog/14403/updates-to-storage-policy/)
+45. [WebKit. Full Third-Party Cookie Blocking and More (7-day script-writable storage cap)](https://webkit.org/blog/10218/full-third-party-cookie-blocking-and-more/)
+46. [ntfy. Publishing (message limits, attachments, topic as password)](https://docs.ntfy.sh/publish/)
+47. [ntfy. FAQ (12-hour cache, logging, FCM)](https://docs.ntfy.sh/faq/)
+48. [ntfy. Subscribe API (poll, since)](https://docs.ntfy.sh/subscribe/api/)
+49. [ntfy issue 69. End-to-end encryption between clients](https://github.com/binwiederhier/ntfy/issues/69)
+50. [GitHub Docs. Creating an issue from a URL query](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/creating-an-issue#creating-an-issue-from-a-url-query)
+51. [Formspree. System limits](https://help.formspree.io/articles/form-and-project-settings/system-limits)
+52. [IETF RFC 6068. The 'mailto' URI scheme](https://www.rfc-editor.org/rfc/rfc6068)
+53. [MDN. Web Share API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Share_API)
+54. [MDN. SubtleCrypto.sign() (Ed25519)](https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/sign)
+55. [Caddy. forward_auth directive](https://caddyserver.com/docs/caddyfile/directives/forward_auth)
+56. [Authelia. Caddy integration (Remote-User, Remote-Groups, Remote-Email, Remote-Name)](https://www.authelia.com/integration/proxies/caddy/)
+57. [oauth2-proxy. Configuration overview (pass-user-headers, set-xauthrequest)](https://oauth2-proxy.github.io/oauth2-proxy/configuration/overview)
+58. [Command Line Interface Guidelines (clig.dev)](https://clig.dev/)
+59. [Anthropic Engineering. Writing effective tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents)
+60. [Agent Skills. Specification](https://agentskills.io/specification)
+61. [Vercel. Introducing skills, the open agent skills ecosystem](https://vercel.com/changelog/introducing-skills-the-open-agent-skills-ecosystem)
+62. [antfu. skills-npm](https://github.com/antfu/skills-npm)
+63. [Model Context Protocol. TypeScript SDK (v2: @modelcontextprotocol/server)](https://github.com/modelcontextprotocol/typescript-sdk)
+64. [llms.txt proposal](https://llmstxt.org/)
+65. [IETF RFC 4648 §5. Base64url encoding](https://www.rfc-editor.org/rfc/rfc4648#section-5)
+66. [IETF draft. The Idempotency-Key HTTP header field](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/)
+67. [Chrome for Developers. Page Lifecycle API](https://developer.chrome.com/docs/web-platform/page-lifecycle-api)
+68. [IETF RFC 2104. HMAC: Keyed-Hashing for Message Authentication](https://www.rfc-editor.org/rfc/rfc2104)

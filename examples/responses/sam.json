@@ -1,0 +1,9 @@
+{ "schema": "annoquest/responses", "version": 1, "request": "example-pilot-plan-0001", "reader": { "id": "sam", "name": "Sam" },
+  "answers": {
+    "read-goals": { "value": true, "at": "2026-10-02T10:00:00Z", "rev": 1 },
+    "timeline": { "value": "reservations", "comment": "Only if the kits arrive on time.", "at": "2026-10-02T10:01:00Z", "rev": 2 },
+    "threshold": { "value": "discuss", "at": "2026-10-02T10:02:00Z", "rev": 1 },
+    "budget": { "value": "approve", "at": "2026-10-02T10:03:00Z", "rev": 1 }
+  },
+  "extras": [{ "id": "x1", "doc": "plan", "target": { "quote": { "exact": "without a technician present" } }, "comment": "Is remote support allowed?", "at": "2026-10-02T10:04:00Z" }],
+  "updatedAt": "2026-10-02T10:04:00Z" }

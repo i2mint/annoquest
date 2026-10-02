@@ -1,0 +1,89 @@
+{
+  "name": "annoquest",
+  "version": "0.1.0",
+  "description": "Guided annotation requests, agent-first: give a reader documents and a prioritised list of items to read, check and annotate; answers autosave and autosubmit; collect them as an alignment summary.",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "annoquest": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./viewer.html": "./dist/viewer.html",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "llms.txt"
+  ],
+  "scripts": {
+    "build": "pnpm build:viewer && pnpm build:lib",
+    "build:lib": "tsup",
+    "build:viewer": "vite build --config viewer/vite.config.ts && node -e \"require('fs').copyFileSync('dist/viewer/index.html','dist/viewer.html')\"",
+    "dev": "vite --config viewer/vite.config.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "smoke": "node dist/cli.js bake examples/request.json --out /tmp/annoquest-smoke.html --json && node dist/cli.js collect examples/responses --request examples/request.json --format markdown"
+  },
+  "dependencies": {
+    "approx-string-match": "^2.0.0",
+    "fflate": "^0.8.3",
+    "linkedom": "^0.18.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "@zodal/core": "^0.2.0",
+    "@zodal/store": "^0.2.0",
+    "@zodal/store-localstorage": "^0.2.0",
+    "immer": "^10.1.0",
+    "jsdom": "^26.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tsup": "^8.5.0",
+    "typescript": "~5.9.0",
+    "vite": "^7.0.0",
+    "vite-plugin-singlefile": "^2.3.0",
+    "vitest": "^3.2.0",
+    "zustand": "^5.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/i2mint/annoquest.git"
+  },
+  "keywords": [
+    "annotation",
+    "review",
+    "sign-off",
+    "alignment",
+    "guided",
+    "web-annotation",
+    "text-quote-selector",
+    "agent-skills",
+    "human-in-the-loop",
+    "ai-agents"
+  ],
+  "packageManager": "pnpm@9.15.0"
+}

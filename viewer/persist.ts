@@ -9,7 +9,10 @@
  */
 import type { DataProvider } from '@zodal/store';
 import { createLocalStorageProvider } from '@zodal/store-localstorage';
+import { mergeResponses } from '../src/collect';
 import type { Request, Responses } from '../src/spec';
+
+export { mergeResponses };
 
 export type Stored = Responses & { id: string };
 
@@ -33,25 +36,6 @@ export async function saveLocal(store: DataProvider<Stored>, value: Stored): Pro
   } catch {
     return false;
   }
-}
-
-/** Merge two copies of a reader's responses: per answer the higher rev wins; extras are unioned. */
-export function mergeResponses<T extends Responses>(a: T, b: Responses | undefined): T {
-  if (!b) return a;
-  const answers = { ...a.answers };
-  for (const [k, v] of Object.entries(b.answers)) {
-    const mine = answers[k];
-    if (!mine || mine.rev < v.rev || (mine.rev === v.rev && mine.at < v.at)) answers[k] = v;
-  }
-  const ids = new Set(a.extras.map((x) => x.id));
-  const extras = [...a.extras, ...b.extras.filter((x) => !ids.has(x.id))];
-  return {
-    ...a,
-    answers,
-    extras,
-    updatedAt: a.updatedAt > b.updatedAt ? a.updatedAt : b.updatedAt,
-    finishedAt: a.finishedAt ?? b.finishedAt,
-  };
 }
 
 export type SinkState =
@@ -169,9 +153,17 @@ export function createHttpSink(
     if (!pending || authBlocked) return;
     const value = pending;
     pending = null;
-    void post(value, true).catch(() => {
-      pending ??= value;
-    });
+    void post(value, true)
+      .then(async (res) => {
+        const json = res.headers.get('content-type')?.includes('json') ? await res.json().catch(() => null) : null;
+        if (!res.ok || !json?.saved) throw new Error(String(res.status));
+      })
+      .catch(() => {
+        // Not saved after all: keep it, and let the normal path retry (it sorts out why).
+        pending ??= value;
+        clearTimeout(timer);
+        timer = setTimeout(() => void flush(), 5000);
+      });
   };
 
   const onHide = () => {
@@ -204,6 +196,9 @@ export function createHttpSink(
         credentials: 'same-origin',
       }).catch(() => null);
       if (res && res.status === 401) onState({ kind: 'auth' });
+      if (res && res.status === 409) {
+        throw new Error('This link does not match the request registered under its id, so answers cannot be sent. Ask its sender for a fresh link.');
+      }
     },
     async mine() {
       try {

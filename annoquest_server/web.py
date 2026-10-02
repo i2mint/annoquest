@@ -26,7 +26,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from .store import Store, valid_id
+from .store import Store, valid_id, well_formed
 
 _log = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ IDENTITY_MAX_CHARS = 254
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
 MAX_RESPONSES_BYTES = 2 * 1024 * 1024
 #: For documents served at /doc/: no script, still same-origin (so the viewer can read the frame).
-DOC_CSP = "sandbox allow-same-origin allow-popups; default-src 'self' data:; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+DOC_CSP = "sandbox allow-same-origin allow-popups; default-src 'self' data:; style-src 'self' 'unsafe-inline' https:; img-src * data:; font-src * data:"
 
 _HERE = Path(__file__).resolve().parent
 #: Where the built viewer is looked for: the deployed ref first, then a local build.
@@ -144,6 +144,11 @@ def mk_app(
             if not is_owner(user, data):
                 return _err(403, "Only the sender of this request (its requester) can register it.")
             created = store.put_request(data, by=user)
+            if not created:
+                stored = (store.get_request(rid) or {}).get("request")
+                if json.dumps(stored, sort_keys=True) != json.dumps(data, sort_keys=True):
+                    # Someone registered a different request under this id: say so, loudly.
+                    return _err(409, "A different request is already registered under this id.")
             return JSONResponse({"id": rid, "created": created}, status_code=201 if created else 200)
         request, err = load(rid)
         if err:
@@ -166,7 +171,7 @@ def mk_app(
             data, err = await body_json(req, MAX_RESPONSES_BYTES)
             if err:
                 return err
-            if not isinstance(data, dict) or data.get("request") != rid or data.get("schema") != "annoquest/responses":
+            if not isinstance(data, dict) or data.get("request") != rid or data.get("schema") != "annoquest/responses" or not well_formed(data):
                 return _err(400, "The body is not annoquest responses for this request.")
             name = store.add_responses(rid, data, by=user or "anonymous")
             return JSONResponse({"saved": name}, status_code=201)

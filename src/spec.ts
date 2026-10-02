@@ -183,6 +183,8 @@ export const Responses = z.object({
   reader: Person.default({}),
   answers: z.record(z.string(), Answer).default({}),
   extras: z.array(Extra).default([]),
+  /** Ids of extras the reader removed: a tombstone, so a merge with an older copy cannot bring them back. */
+  removed: z.array(z.string()).default([]),
   updatedAt: z.string(),
   finishedAt: z.string().optional(),
   /** Set by a server from its identity header; never trusted from a client. */

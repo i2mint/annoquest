@@ -48,7 +48,8 @@ def test_requests_are_write_once(client):
     c, _ = client
     assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ada@example.org")).status_code == 201
     other = {**REQUEST, "title": "hijacked"}
-    assert c.put(f"/api/requests/{RID}", json=other, headers=as_("ADA@example.org")).json() == {"id": RID, "created": False}
+    assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ADA@example.org")).json() == {"id": RID, "created": False}
+    assert c.put(f"/api/requests/{RID}", json=other, headers=as_("ada@example.org")).status_code == 409
     assert c.get(f"/api/requests/{RID}", headers=as_("sam@example.org")).json()["title"] == "T"
     assert c.put("/api/requests/other-id-99", json=REQUEST, headers=as_("ada@example.org")).status_code == 400
 
@@ -60,7 +61,7 @@ def test_a_reader_cannot_register_or_take_over(client):
     # A reader cannot register it, nor replace it by naming himself as its sender.
     forged = {**REQUEST, "requester": {"email": "sam@example.org"}}
     assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("sam@example.org")).status_code == 403
-    assert c.put(f"/api/requests/{RID}", json=forged, headers=as_("sam@example.org")).json()["created"] is False
+    assert c.put(f"/api/requests/{RID}", json=forged, headers=as_("sam@example.org")).status_code == 409
     assert c.get(f"/api/requests/{RID}/responses", headers=as_("sam@example.org")).status_code == 403
     assert c.put(f"/api/requests/{RID}", json=REQUEST).status_code == 401
 
@@ -131,3 +132,36 @@ def test_docs_dir_is_served_without_escaping(tmp_path):
     assert c.get("/doc/.git/config").status_code == 404
     assert c.get("/doc/../outside.txt").status_code == 404
     assert c.get("/doc/%2e%2e/outside.txt").status_code == 404
+
+
+def test_a_forged_first_registration_is_loud(client):
+    c, _ = client
+    forged = {**REQUEST, "requester": {"email": "sam@example.org"}}
+    assert c.put(f"/api/requests/{RID}", json=forged, headers=as_("sam@example.org")).status_code == 201
+    # The real sender's preview now gets a conflict, not a quiet "already there".
+    assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ada@example.org")).status_code == 409
+
+
+def test_bad_saves_are_refused_and_never_break_collection(client):
+    c, data = client
+    c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ada@example.org"))
+    bad = {**responses({}), "answers": "zz"}
+    assert c.post(f"/api/requests/{RID}/responses", json=bad, headers=as_("sam@example.org")).status_code == 400
+    good = responses({"a": {"value": "agree", "at": "t", "rev": 1}})
+    c.post(f"/api/requests/{RID}/responses", json=good, headers=as_("sam@example.org"))
+    # A damaged file on disk (however it got there) is skipped.
+    d = next((data / "responses" / RID).iterdir())
+    (d / "0000000000000-bad.json").write_text("{not json")
+    (d / "0000000000001-bad.json").write_text(json.dumps({"responses": {"answers": "zz"}}))
+    r = c.get(f"/api/requests/{RID}/responses", headers=as_("ada@example.org"))
+    assert r.status_code == 200 and r.json()["responses"][0]["answers"]["a"]["value"] == "agree"
+
+
+def test_removed_comments_stay_removed(client):
+    c, _ = client
+    c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ada@example.org"))
+    x = {"id": "x1", "doc": "d", "target": {}, "comment": "c", "at": "t"}
+    c.post(f"/api/requests/{RID}/responses", json={**responses({}), "extras": [x]}, headers=as_("sam@example.org"))
+    later = {**responses({}, at="2026-10-02T11:00:00Z"), "extras": [], "removed": ["x1"]}
+    c.post(f"/api/requests/{RID}/responses", json=later, headers=as_("sam@example.org"))
+    assert c.get(f"/api/requests/{RID}/responses/mine", headers=as_("sam@example.org")).json()["extras"] == []

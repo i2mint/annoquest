@@ -66,13 +66,39 @@ export function parseResponses(values: unknown[], request?: Pick<Request, 'id'>)
 /** Who a responses document is from: the server-asserted identity first, then the reader's own. */
 export const readerKey = (r: Responses) => (r.by ?? r.reader.email)?.toLowerCase() ?? r.reader.id ?? r.reader.name ?? 'anonymous';
 
-/** Keep the latest responses per reader (by `updatedAt`). */
+/**
+ * Merge two copies of one reader's responses: per answer the higher `(rev, at)` wins; extras are
+ * unioned by id, minus any either copy removed. Two tabs or two devices each hold a whole copy;
+ * merging instead of keeping the newer one means neither erases the other.
+ */
+export function mergeResponses<T extends Responses>(a: T, b: Responses | undefined): T {
+  if (!b) return a;
+  const answers = { ...a.answers };
+  for (const [k, v] of Object.entries(b.answers)) {
+    const mine = answers[k];
+    if (!mine || mine.rev < v.rev || (mine.rev === v.rev && mine.at < v.at)) answers[k] = v;
+  }
+  const removed = [...new Set([...(a.removed ?? []), ...(b.removed ?? [])])];
+  const gone = new Set(removed);
+  const ids = new Set(a.extras.map((x) => x.id));
+  const extras = [...a.extras, ...b.extras.filter((x) => !ids.has(x.id))].filter((x) => !gone.has(x.id));
+  return {
+    ...a,
+    answers,
+    extras,
+    removed,
+    updatedAt: a.updatedAt > b.updatedAt ? a.updatedAt : b.updatedAt,
+    finishedAt: a.finishedAt ?? b.finishedAt,
+  };
+}
+
+/** One responses document per reader: all of that reader's saves, merged (see `mergeResponses`). */
 export function latestPerReader(all: Responses[]): Responses[] {
   const m = new Map<string, Responses>();
-  for (const r of all) {
+  for (const r of [...all].sort((x, y) => (x.updatedAt < y.updatedAt ? -1 : 1))) {
     const k = readerKey(r);
     const prev = m.get(k);
-    if (!prev || prev.updatedAt < r.updatedAt) m.set(k, r);
+    m.set(k, prev ? mergeResponses(r, prev) : r);
   }
   return [...m.values()];
 }

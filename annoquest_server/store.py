@@ -35,28 +35,47 @@ def reader_key(identity: str, salt: str = "") -> str:
     return hashlib.sha256(f"{salt}:{identity.strip().lower()}".encode("utf-8")).hexdigest()[:16]
 
 
+def well_formed(responses: object) -> bool:
+    """Whether a responses document has the shape merging relies on (the client is not trusted)."""
+    if not isinstance(responses, dict):
+        return False
+    answers, extras, removed = responses.get("answers", {}), responses.get("extras", []), responses.get("removed", [])
+    return (
+        isinstance(answers, dict)
+        and all(isinstance(k, str) and isinstance(a, dict) and isinstance(a.get("rev", 0), int) and isinstance(a.get("at", ""), str) for k, a in answers.items())
+        and isinstance(extras, list)
+        and all(isinstance(x, dict) and isinstance(x.get("id"), str) for x in extras)
+        and isinstance(removed, list)
+        and all(isinstance(i, str) for i in removed)
+        and isinstance(responses.get("updatedAt", ""), str)
+    )
+
+
 def merge_responses(saves: list[dict]) -> dict | None:
-    """Fold a reader's saves into one: per answer the higher (rev, at) wins; extras are unioned.
+    """Fold a reader's saves into one: per answer the higher (rev, at) wins; extras are
+    unioned, minus any id a save removed (the same rules as annoquest's `mergeResponses`).
 
     Two tabs or two devices each send their whole copy; folding instead of taking the
-    newest file means neither erases the other.
+    newest file means neither erases the other. A malformed save is skipped, never fatal.
     """
+    saves = sorted((r for r in saves if well_formed(r)), key=lambda r: r.get("updatedAt") or "")
     if not saves:
         return None
-    saves = sorted(saves, key=lambda r: r.get("updatedAt") or "")
-    out = {**saves[-1], "answers": {}, "extras": []}
-    seen: set[str] = set()
+    out = {**saves[-1], "answers": {}, "extras": [], "removed": []}
+    removed: set[str] = set()
+    extras: dict[str, dict] = {}
     for r in saves:
         for k, a in (r.get("answers") or {}).items():
             cur = out["answers"].get(k)
             if cur is None or (a.get("rev", 0), a.get("at", "")) >= (cur.get("rev", 0), cur.get("at", "")):
                 out["answers"][k] = a
         for x in r.get("extras") or []:
-            if x.get("id") not in seen:
-                seen.add(x.get("id"))
-                out["extras"].append(x)
+            extras.setdefault(x["id"], x)
+        removed.update(r.get("removed") or [])
         if r.get("finishedAt") and not out.get("finishedAt"):
             out["finishedAt"] = r["finishedAt"]
+    out["extras"] = [x for i, x in extras.items() if i not in removed]
+    out["removed"] = sorted(removed)
     return out
 
 
@@ -123,7 +142,13 @@ class Store:
 
     def _fold(self, d: Path) -> dict | None:
         files = sorted(d.glob("*.json")) if d.is_dir() else []
-        return merge_responses([json.loads(f.read_text(encoding="utf-8"))["responses"] for f in files])
+        saves = []
+        for f in files:
+            try:
+                saves.append(json.loads(f.read_text(encoding="utf-8"))["responses"])
+            except (ValueError, KeyError, TypeError):
+                continue  # a damaged file must not hide the reader's other saves
+        return merge_responses(saves)
 
     def latest(self, request_id: str, identity: str) -> dict | None:
         """A reader's current answers: all their saves, folded."""

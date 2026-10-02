@@ -19,6 +19,8 @@ import {
   summarize,
   parseResponses,
   parseRequest,
+  mergeResponses,
+  latestPerReader,
   summaryMarkdown,
   toElicitation,
   type Responses,
@@ -138,6 +140,7 @@ describe('collecting', () => {
       schema: 'annoquest/responses', version: 1, request: req.id, reader: { id: 'ann' }, by: 'ann@example.org',
       answers: { timeline: answer('agree'), 'read-the-risks': answer(true), budget: answer('changes', 'Too tight') },
       extras: [{ id: 'x1', doc: 'plan', target: { quote: { exact: 'vendor is late' } }, comment: 'Which vendor?', at: '2026-10-02T10:01:00Z' }],
+      removed: [],
       updatedAt: '2026-10-02T10:02:00Z',
     };
     const bo: Responses = { ...ann, by: undefined, reader: { id: 'bo' }, answers: { timeline: answer('discuss') }, extras: [], updatedAt: '2026-10-02T09:00:00Z' };
@@ -188,5 +191,21 @@ describe('review fixes', () => {
     const { responses } = parseResponses([{ ...base, by: 'forged@example.org' }, { responses: base, by: 'real@example.org' }]);
     expect(responses.map((r) => r.by)).toEqual([undefined, 'real@example.org']);
     expect(() => parseRequest({ title: 't', documents: [{ id: 'd', source: { kind: 'url', url: 'x' } }], items: [{ prompt: 'p' }] })).toThrow(/no id/);
+  });
+});
+
+describe('re-review fixes', () => {
+  const r = (over: Partial<Responses>): Responses => ({ schema: 'annoquest/responses', version: 1, request: 'r', reader: { id: 'a' }, answers: {}, extras: [], removed: [], updatedAt: '2026-10-02T10:00:00Z', ...over });
+  const x = (id: string) => ({ id, doc: 'd', target: { quote: { exact: 'q' } }, comment: 'c', at: 't' });
+  it('a removed comment stays removed when an older copy is merged in', () => {
+    const older = r({ extras: [x('x1'), x('x2')] });
+    const newer = r({ extras: [x('x2')], removed: ['x1'], updatedAt: '2026-10-02T11:00:00Z' });
+    expect(mergeResponses(newer, older).extras.map((e) => e.id)).toEqual(['x2']);
+    expect(mergeResponses(older, newer).extras.map((e) => e.id)).toEqual(['x2']);
+  });
+  it('collect folds every save of a reader, so two tabs both count', () => {
+    const tabA = r({ answers: { i1: { value: 'agree', at: '2026-10-02T10:00:00Z', rev: 1 } } });
+    const tabB = r({ answers: { i2: { value: 'discuss', at: '2026-10-02T10:05:00Z', rev: 1 } }, updatedAt: '2026-10-02T10:05:00Z' });
+    expect(Object.keys(latestPerReader([tabA, tabB])[0]!.answers).sort()).toEqual(['i1', 'i2']);
   });
 });

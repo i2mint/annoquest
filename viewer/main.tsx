@@ -32,7 +32,7 @@ export async function mountViewer(root: HTMLElement, { store = defaultStore() }:
       (request.readers.length === 1 && !readerParam && !user ? request.readers[0] : undefined);
     const key = match?.id ?? user ?? readerParam ?? 'me';
     const reader = { ...match, key };
-    if (sink && origin !== 'spec') await sink.register(request);
+    if (sink && origin !== 'spec') await sink.register(request); // throws on a conflicting registration
     // The requester opening their own request (not as a listed reader) is previewing it:
     // registering it is useful, sending answers as theirs is not.
     const preview = !!sink && !!user && !match && user === request.requester?.email?.toLowerCase();
@@ -53,9 +53,10 @@ export async function mountViewer(root: HTMLElement, { store = defaultStore() }:
     responses = mergeResponses(responses, remote);
     v.init({ request, reader, responses });
     if (sink) {
+      const canon = (v: unknown): string => JSON.stringify(v, (_k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([p], [q]) => (p < q ? -1 : 1))) : x));
       // Anything kept here but not yet on the server (closed while offline, signed out…) goes now.
       const same = (a?: { answers: unknown; extras: unknown }, b?: { answers: unknown; extras: unknown }) =>
-        !!a && !!b && JSON.stringify([a.answers, a.extras]) === JSON.stringify([b.answers, b.extras]);
+        !!a && !!b && canon([a.answers, a.extras]) === canon([b.answers, b.extras]);
       const has = Object.keys(responses.answers).length || responses.extras.length;
       if (has && !same(responses, remote)) {
         const { id: _drop, ...plain } = responses;

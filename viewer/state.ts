@@ -93,6 +93,7 @@ export const useViewer = create<ViewerState>()(
       set((s) => {
         if (!s.responses) return;
         s.responses.extras = s.responses.extras.filter((x) => x.id !== id);
+        s.responses.removed = [...(s.responses.removed ?? []), id];
         s.responses.updatedAt = now();
       }),
     finish: () =>

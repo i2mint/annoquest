@@ -28,5 +28,5 @@ export {
 export { createRequest, parseRequest, checkRequest, checkItem, newId, docOf, type CreateInput, type CheckReport, type ItemCheck } from './request';
 export { encodePayload, decodePayload, requestLink, specLink, replyLink, readLink, linkTier } from './link';
 export { bakeRequest, inlineDocuments, scriptSafeJson, REQUEST_SCRIPT_ID } from './bake';
-export { parseResponses, latestPerReader, readerKey, summarize, summaryMarkdown, type Summary, type ItemSummary, type ItemStatus } from './collect';
+export { parseResponses, mergeResponses, latestPerReader, readerKey, summarize, summaryMarkdown, type Summary, type ItemSummary, type ItemStatus } from './collect';
 export { toElicitation, type Elicitation } from './elicit';

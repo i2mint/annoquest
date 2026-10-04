@@ -57,6 +57,7 @@
     "@zodal/core": "^0.2.0",
     "@zodal/store": "^0.2.0",
     "@zodal/store-localstorage": "^0.2.0",
+    "dompurify": "^3.4.16",
     "immer": "^10.1.0",
     "jsdom": "^26.0.0",
     "playwright": "^1.63.0",

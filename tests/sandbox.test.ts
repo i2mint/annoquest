@@ -18,7 +18,16 @@ const DOC = `<!doctype html><html><head><style>body { font-family: serif } .x { 
 <script>document.documentElement.dataset.scripted = 'yes'</script></head><body id="top">
 <section id="goals"><h2>Goals</h2><p>We will ship the pilot to three sites in two weeks.</p>
 <img src="x" onerror="window.pwned = 'onerror'"><a id="bad" href="javascript:window.pwned='href'">bad link</a>
-<a id="jump" href="#later">jump</a></section>
+<a id="jump" href="#later">jump</a> <a id="ext" href="https://example.org/">ext</a></section>
+<section id="hostile"><h2>Hostile</h2>
+<svg width="60" height="20"><a id="svga" href="jav&#x09;ascript:window.pwned='svg-a'"><text x="0" y="15">svg</text></a></svg>
+<svg width="60" height="20"><a id="xl" xlink:href="javascript:window.pwned='xlink'"><text x="0" y="15">xlink</text></a></svg>
+<svg width="60" height="20"><a id="anim"><set attributeName="href" to="javascript:window.pwned='set'"/><text x="0" y="15">anim</text></a></svg>
+<form><button id="fb" formaction="jav&#x0A;ascript:window.pwned='formaction'">go</button></form>
+<a id="ctrl" href="&#x01;javascript:window.pwned='ctrl'">ctrl</a>
+<img usemap="#m" width="10" height="10" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><map name="m"><area id="area" shape="rect" coords="0,0,10,10" href="jav&#x09;ascript:window.pwned='area'"></map>
+<div id="overlay" style="position:fixed;inset:0;z-index:2147483647;background:rgba(255,0,0,.02)">overlay</div>
+</section>
 <details id="later"><summary>Later</summary><p>The budget is fixed at 10k, no more.</p></details>
 </body></html>`;
 
@@ -106,6 +115,13 @@ describe.skipIf(!haveViewer).each(ENGINES.map(([n]) => n))('a baked page in %s',
     await page.goto(`${base}/page.html`);
     const seen = await startAndInspect(page.mainFrame());
     expect(seen).toMatchObject({ detached: false, shadow: false, current: 'ship the pilot to three sites', others: 1, scripted: null, pwned: null });
+    // A link followed in the framed snapshot opens elsewhere; the document never leaves its frame,
+    // and on a normal origin it is never moved into this page's DOM.
+    const popup = page.waitForEvent('popup', { timeout: 5000 }).catch(() => null);
+    await page.evaluate(() => (document.querySelector('iframe')!.contentDocument!.getElementById('ext') as HTMLAnchorElement).click());
+    await (await popup)?.close();
+    await page.waitForTimeout(500);
+    expect(await page.evaluate(() => ({ shadow: !!document.querySelector('.doc-shadow'), reachable: !!document.querySelector('iframe')?.contentDocument?.getElementById('goals') }))).toEqual({ shadow: false, reachable: true });
     await page.close();
   }, 60000);
 
@@ -141,6 +157,39 @@ describe.skipIf(!haveViewer).each(ENGINES.map(([n]) => n))('a baked page in %s',
     // The unsafe link and handler were stripped.
     expect(await frame.evaluate(() => document.querySelector('.doc-shadow > div')!.shadowRoot!.getElementById('bad')!.getAttribute('href'))).toBeNull();
     expect(errors).toEqual([]);
+    await page.close();
+  }, 60000);
+
+  it('runs nothing from a hostile document, and lets nothing cover the guide', async () => {
+    const page: Page = await browser.newPage();
+    await page.goto(`${base}/host.html?sandboxed`);
+    await page.evaluate(() => ((document.getElementById('f') as HTMLIFrameElement).src = '/page.html?sandboxed'));
+    await page.waitForTimeout(500);
+    const frame = page.frames().find((f) => f.url().includes('page.html'))!;
+    await startAndInspect(frame);
+    const before = await frame.evaluate(() => location.href);
+    const result = await frame.evaluate(async () => {
+      const sh = document.querySelector('.doc-shadow > div')!.shadowRoot!;
+      const click = (id: string) => sh.getElementById(id)?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+      for (const id of ['svga', 'xl', 'anim', 'fb', 'ctrl', 'area']) click(id);
+      (sh.getElementById('ctrl') as HTMLAnchorElement | null)?.click();
+      (sh.getElementById('fb') as HTMLButtonElement | null)?.click();
+      await new Promise((r) => setTimeout(r, 600));
+      const panel = document.querySelector('.panel')!.getBoundingClientRect();
+      const topEl = document.elementFromPoint(panel.left + panel.width / 2, panel.top + panel.height / 2);
+      const attrs = ['svga', 'xl', 'ctrl', 'area'].map((id) => [id, sh.getElementById(id)?.getAttribute('href') ?? sh.getElementById(id)?.getAttributeNS('http://www.w3.org/1999/xlink', 'href') ?? null]);
+      return {
+        pwned: (window as unknown as { pwned?: string }).pwned ?? null,
+        overlayCoversGuide: !document.querySelector('.panel')!.contains(topEl),
+        forms: sh.querySelectorAll('form, button, set').length,
+        attrs,
+      };
+    });
+    expect(result.pwned).toBeNull();
+    expect(result.overlayCoversGuide).toBe(false);
+    expect(result.forms).toBe(0);
+    for (const [, href] of result.attrs) expect(href).toBeNull();
+    expect(await frame.evaluate(() => location.href)).toBe(before);
     await page.close();
   }, 60000);
 });

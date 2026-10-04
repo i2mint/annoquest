@@ -90,7 +90,8 @@ export function frameSurface(frame: HTMLIFrameElement): Surface {
 /** A shadow root in the viewer's own DOM, its body stand-in, and the element that scrolls it. */
 export function shadowSurface(shadow: ShadowRoot, body: HTMLElement, scroller: HTMLElement, key = ''): Surface {
   return {
-    highlightSuffix: `-${key.replace(/[^\w-]/g, '_') || 'doc'}`,
+    // Unambiguous per document id ('a.b' and 'a_b' must not collide).
+    highlightSuffix: `-${Array.from(key || 'doc', (c) => (/[A-Za-z0-9]/.test(c) ? c : `_${c.codePointAt(0)!.toString(16)}_`)).join('')}`,
     root: shadow,
     body,
     doc: document,
@@ -252,8 +253,8 @@ export class DocFrame {
     const caret = this.surface.caretAt(x, y);
     const passages = items.map((it) => ({ id: it.id, a: this.anchor(it) })).filter(({ a }) => a.range && a.how !== 'section');
     if (caret && this.surface.body.contains(caret.node)) {
-      const hit = passages.find(({ a }) => a.range!.isPointInRange(caret.node, caret.offset));
-      if (hit) return hit.id;
+      // The caret saw the click: it is in a passage or it is not, nothing to guess.
+      return passages.find(({ a }) => a.range!.isPointInRange(caret.node, caret.offset))?.id;
     }
     if (!target) return undefined;
     // No caret API (or it did not see into the shadow tree): the smallest passage touching the clicked node.

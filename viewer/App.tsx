@@ -217,7 +217,10 @@ function DocView({ doc, hidden, onFrame }: { doc: Doc; hidden: boolean; onFrame:
     try {
       onFrame(doc.id, new DocFrame(frameSurface(ref.current!)));
     } catch {
-      if (inline) setMode('shadow');
+      // Only an opaque origin gets the shadow root: on a normal origin the document must stay
+      // in its script-less frame, away from this page's storage and API. A frame that became
+      // unreachable here (it navigated away) is shown as detached.
+      if (inline && opaqueOrigin()) setMode('shadow');
       else {
         onFrame(doc.id, null);
         setMode('detached');
@@ -269,8 +272,12 @@ function ShadowDocView({ doc, html, baseUrl, hidden, onFrame }: { doc: Doc; html
   );
 }
 
-const withBase = (html: string, baseUrl?: string) =>
-  baseUrl && !/<base\s/i.test(html) ? html.replace(/<head([^>]*)>/i, (m) => `${m}<base href="${baseUrl.replace(/"/g, '&quot;')}" target="_blank">`) : html;
+/** Links in a framed snapshot open a new tab (a link followed inside the frame would take it away). */
+const withBase = (html: string, baseUrl?: string) => {
+  if (/<base\s/i.test(html)) return html;
+  const tag = `<base${baseUrl ? ` href="${baseUrl.replace(/"/g, '&quot;')}"` : ''} target="_blank">`;
+  return /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, (m) => `${m}${tag}`) : `${tag}${html}`;
+};
 
 // ---------------------------------------------------------------------------
 

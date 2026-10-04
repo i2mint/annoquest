@@ -138,6 +138,17 @@ describe.skipIf(!haveViewer).each(ENGINES.map(([n]) => n))('a baked page in %s',
     const seen = await startAndInspect(frame);
     // others: one passage in each document, both still painted (a shared registry must not lose one).
     expect(seen).toMatchObject({ detached: false, shadow: true, current: 'ship the pilot to three sites', others: 2, scripted: null, pwned: null });
+    // The document scrolls inside its pane: the page never grows to the document's height
+    // (a 47,000 px tall panel painted blank in Chrome).
+    const fit = await frame.evaluate(() => {
+      // Make the document taller than the frame, as a real one is.
+      document.querySelector('.doc-shadow > div')!.shadowRoot!.querySelector('.aq-body')!.insertAdjacentHTML('beforeend', '<p>filler</p>'.repeat(400));
+      const pane = document.querySelector('.doc-shadow')!;
+      return { panel: document.querySelector('.panel')!.getBoundingClientRect().height, pane: pane.getBoundingClientRect().height, view: innerHeight, scrolls: pane.scrollHeight > pane.clientHeight };
+    });
+    expect(fit.panel).toBeLessThanOrEqual(fit.view);
+    expect(fit.pane).toBeLessThanOrEqual(fit.view);
+    expect(fit.scrolls).toBe(true);
 
     // Navigating to the other item opens its <details> and highlights inside it.
     await frame.evaluate(() => [...document.querySelectorAll('.row-btn')].find((b) => b.textContent!.includes('OK?'))!.dispatchEvent(new MouseEvent('click', { bubbles: true })));

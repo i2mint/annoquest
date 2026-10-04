@@ -28,6 +28,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm build
+      # The sandbox test runs the built viewer in real browsers (WebKit is what phones use).
+      - run: pnpm exec playwright install --with-deps chromium webkit
       - run: pnpm test
       - run: pnpm smoke
       - name: Validate shipped skills

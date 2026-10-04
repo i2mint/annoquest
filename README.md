@@ -100,4 +100,4 @@ ANNOQUEST_IDENTITY_HEADER=X-Forwarded-User uvicorn annoquest_server:mk_app --fac
 
 ## License
 
-MIT
+MIT. The built viewer bundles [React](https://react.dev) (MIT), [zustand](https://github.com/pmndrs/zustand) (MIT), [immer](https://github.com/immerjs/immer) (MIT), [Zod](https://zod.dev) (MIT), [fflate](https://github.com/101arrowz/fflate) (MIT), [approx-string-match](https://github.com/robertknight/approx-string-match-js) (MIT) and [DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0 or MPL-2.0; used here under Apache-2.0).

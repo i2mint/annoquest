@@ -216,8 +216,9 @@ export function sectionSpan(index: TextIndex, el: Element): { start: number; end
   const level = HEADING.exec(el.tagName.toUpperCase())?.[1];
   let stop: Node | null = null;
   if (level) {
-    const doc = el.ownerDocument;
-    const hs = Array.from(doc.querySelectorAll('h1,h2,h3,h4,h5,h6'));
+    // The element's own tree: a document, or a shadow root when the document is rendered into one.
+    const root = el.getRootNode() as Document | ShadowRoot;
+    const hs = Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6'));
     stop = hs.slice(hs.indexOf(el) + 1).find((h) => Number(h.tagName[1]) <= Number(level)) ?? null;
   } else {
     for (let p: Node | null = el; p && !stop; p = p.parentNode) stop = p.nextSibling;

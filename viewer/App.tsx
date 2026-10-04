@@ -7,7 +7,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { commentRequired, resolveResponseType } from '../src/presets';
 import { replyLink } from '../src/link';
 import type { Doc, Item, Option, Request, ResponseType, Target } from '../src/spec';
-import { DocFrame, textFragmentUrl, type Anchored } from './docframe';
+import { DocFrame, frameSurface, shadowSurface, textFragmentUrl, type Anchored } from './docframe';
+import { mountShadowDocument } from './shadowdoc';
 import type { HttpSink } from './persist';
 import { answered, modeOf, queue, tiers, useViewer, type ViewerState } from './state';
 
@@ -86,8 +87,9 @@ function Guide({ request, sink }: { request: Request; sink: HttpSink | null }) {
       frames.current.set(docId, frame);
       bump((n) => n + 1);
       if (!frame) return;
-      frame.doc.addEventListener('click', (e) => {
-        const hit = frame.itemAt(items.filter((i) => docOfItem(i).id === docId), e.clientX, e.clientY);
+      frame.surface.body.addEventListener('click', (e) => {
+        const ev = e as MouseEvent;
+        const hit = frame.itemAt(items.filter((i) => docOfItem(i).id === docId), ev.clientX, ev.clientY, (ev.composedPath()[0] as Node) ?? null);
         if (hit) go(hit);
       });
       frame.doc.addEventListener('selectionchange', () => {
@@ -197,28 +199,72 @@ function Linked({ text }: { text: string }) {
 
 // ---------------------------------------------------------------------------
 
+/** Whether this page runs in an opaque origin (a sandbox without allow-same-origin, a file opened from mail). */
+const opaqueOrigin = () => {
+  try {
+    return self.origin === 'null';
+  } catch {
+    return true;
+  }
+};
+
 function DocView({ doc, hidden, onFrame }: { doc: Doc; hidden: boolean; onFrame: (id: string, f: DocFrame | null) => void }) {
   const ref = useRef<HTMLIFrameElement>(null);
-  const [detached, setDetached] = useState(false);
+  const inline = doc.source.kind === 'inline' ? doc.source : null;
+  // An inline document can always be shown in our own DOM; a nested frame only when it is reachable.
+  const [mode, setMode] = useState<'frame' | 'shadow' | 'detached'>(() => (inline && opaqueOrigin() ? 'shadow' : 'frame'));
   const onLoad = () => {
     try {
-      onFrame(doc.id, new DocFrame(ref.current!));
-      setDetached(false);
+      onFrame(doc.id, new DocFrame(frameSurface(ref.current!)));
     } catch {
-      onFrame(doc.id, null);
-      setDetached(true);
+      if (inline) setMode('shadow');
+      else {
+        onFrame(doc.id, null);
+        setMode('detached');
+      }
     }
   };
+  if (mode === 'shadow' && inline) return <ShadowDocView doc={doc} html={inline.html} baseUrl={inline.baseUrl} hidden={hidden} onFrame={onFrame} />;
   const src = doc.source.kind === 'url' ? doc.source.url : undefined;
-  const srcDoc = doc.source.kind === 'inline' ? withBase(doc.source.html, doc.source.baseUrl) : undefined;
+  const srcDoc = inline ? withBase(inline.html, inline.baseUrl) : undefined;
   return (
     <div className="doc-view" hidden={hidden}>
-      {detached && (
+      {mode === 'detached' && (
         <p className="doc-detached">
           This document is on another site, so passages can't be highlighted here. Each item shows its passage, with a link to it in the original.
         </p>
       )}
       <iframe ref={ref} title={doc.title ?? doc.id} src={src} srcDoc={srcDoc} onLoad={onLoad} sandbox="allow-same-origin allow-popups" />
+    </div>
+  );
+}
+
+/** An inline document rendered into a shadow root of the viewer itself (see shadowdoc.ts). */
+function ShadowDocView({ doc, html, baseUrl, hidden, onFrame }: { doc: Doc; html: string; baseUrl?: string; hidden: boolean; onFrame: (id: string, f: DocFrame | null) => void }) {
+  const scroller = useRef<HTMLDivElement>(null);
+  const host = useRef<HTMLDivElement>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    try {
+      const { shadow, body } = mountShadowDocument(host.current!, html, { baseUrl });
+      onFrame(doc.id, new DocFrame(shadowSurface(shadow, body, scroller.current!, doc.id)));
+    } catch (e) {
+      console.warn('[annoquest] could not show the document here:', e);
+      onFrame(doc.id, null);
+      setFailed(true);
+    }
+  }, [html]);
+  if (failed)
+    return (
+      <div className="doc-view" hidden={hidden}>
+        <p className="doc-detached">This document cannot be shown here. Each item shows its passage.</p>
+      </div>
+    );
+  return (
+    <div className="doc-view" hidden={hidden}>
+      <div className="doc-shadow" ref={scroller} role="document" aria-label={doc.title ?? doc.id}>
+        <div ref={host} />
+      </div>
     </div>
   );
 }

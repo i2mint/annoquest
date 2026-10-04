@@ -59,6 +59,7 @@
     "@zodal/store-localstorage": "^0.2.0",
     "immer": "^10.1.0",
     "jsdom": "^26.0.0",
+    "playwright": "^1.63.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tsup": "^8.5.0",

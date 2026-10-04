@@ -274,7 +274,7 @@ function ShadowDocView({ doc, html, baseUrl, hidden, onFrame }: { doc: Doc; html
 
 /** Links in a framed snapshot open a new tab (a link followed inside the frame would take it away). */
 const withBase = (html: string, baseUrl?: string) => {
-  if (/<base\s/i.test(html)) return html;
+  // Ours goes first: the first <base> with a target wins, and a document's own <base href> still applies.
   const tag = `<base${baseUrl ? ` href="${baseUrl.replace(/"/g, '&quot;')}"` : ''} target="_blank">`;
   return /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, (m) => `${m}${tag}`) : `${tag}${html}`;
 };

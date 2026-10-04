@@ -169,6 +169,34 @@ function Guide({ request, sink }: { request: Request; sink: HttpSink | null }) {
 
 // ---------------------------------------------------------------------------
 
+const URL_RE = /https?:\/\/[^\s<>"')\]]+[^\s<>"')\].,;:!?]/g;
+
+/** Plain text with its http(s) URLs as links (opened in a new tab); nothing else is interpreted. */
+function Linked({ text }: { text: string }) {
+  const parts: Array<string | { url: string }> = [];
+  let at = 0;
+  for (const m of text.matchAll(URL_RE)) {
+    parts.push(text.slice(at, m.index), { url: m[0] });
+    at = m.index! + m[0].length;
+  }
+  parts.push(text.slice(at));
+  return (
+    <>
+      {parts.map((p, i) =>
+        typeof p === 'string' ? (
+          p
+        ) : (
+          <a key={i} href={p.url} target="_blank" rel="noopener noreferrer">
+            {p.url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}
+          </a>
+        ),
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
 function DocView({ doc, hidden, onFrame }: { doc: Doc; hidden: boolean; onFrame: (id: string, f: DocFrame | null) => void }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const [detached, setDetached] = useState(false);
@@ -265,7 +293,9 @@ function Intro({ request, items, onStart }: { request: Request; items: Item[]; o
   return (
     <div className="intro">
       {(request.intro ?? '').split(/\n\s*\n/).filter(Boolean).map((p, i) => (
-        <p key={i}>{p}</p>
+        <p key={i}>
+          <Linked text={p} />
+        </p>
       ))}
       <ul className="tier-summary">
         {ts.map((t) => (
@@ -356,7 +386,7 @@ function ItemCard(p: { request: Request; item: Item; anchored: Anchored | null; 
         </p>
       )}
       <p className="prompt" id={item.title ? undefined : `t-${item.id}`}>
-        {item.prompt}
+        <Linked text={item.prompt} />
       </p>
       {stale && <p className="warn-text">The passage changed after you answered; please check your answer still holds.</p>}
       <Controls rt={rt} chosen={chosen} onPick={pick} />

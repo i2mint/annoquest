@@ -209,3 +209,13 @@ describe('re-review fixes', () => {
     expect(Object.keys(latestPerReader([tabA, tabB])[0]!.answers).sort()).toEqual(['i1', 'i2']);
   });
 });
+
+describe('viewer CSS', () => {
+  it('never transforms the shadow-root document pane (Chrome paints it blank inside a rounded iframe)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const css = readFileSync(new URL('../viewer/styles.css', import.meta.url), 'utf8');
+    const rule = css.match(/\.doc-shadow\s*\{[^}]*\}/)![0];
+    expect(rule).toContain('contain: paint');
+    expect(rule).not.toMatch(/transform|will-change/);
+  });
+});

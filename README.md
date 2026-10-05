@@ -69,6 +69,9 @@ annoquest check <request.json> [--doc id=path|url]... [--write]
 annoquest bake <request.json> [--out page.html] [--doc id=path|url]... [--inline]
 annoquest link <request.json> --viewer <url> [--reader id] [--spec-url url]
 annoquest collect <file|dir|reply-link>... --request <request.json> [--format json|markdown]
+annoquest revise <request.json> --viewer <url> [--against <published.json>] [--api <url>]
+                                                              a new revision under the same id (and link)
+annoquest diff <before.json> <after.json>                     items added, removed, changed
 annoquest elicit <request.json> <item-id>                     one item as an MCP elicitation schema
 annoquest presets | schema [request|responses]
 ```
@@ -91,6 +94,8 @@ For real autosubmit and server-asserted identity, run the small Python app in th
 pip install "annoquest-server[server] @ git+https://github.com/i2mint/annoquest"
 ANNOQUEST_IDENTITY_HEADER=X-Forwarded-User uvicorn annoquest_server:mk_app --factory
 ```
+
+**Revisions.** A request's sender can publish new versions under the same id, so the link already sent keeps working and shows the latest: `annoquest revise new.json --against published.json --viewer <server>` prints the diff and a link; opened by the sender, its preview has a *Publish as a new revision* button (or pass `--api` with a header your gateway accepts). Every revision is kept; answers bind by item id, so answers to unchanged items carry over, an answered item that changed shows *updated since you last answered*, and answers to removed items stay in the history and in `collect`'s summary.
 
 **Open a request's link yourself before sending it**: that registers it (only its sender can), and the viewer shows a preview banner so nothing you click is sent. It serves the viewer at `/`, stores each request once and every save as a new file (`requests/<id>.json`, `responses/<id>/<reader>/<stamp>.json`, no emails in paths), lets a request's listed readers and its requester in, and lets only the requester read everyone's answers. `ANNOQUEST_DOCS_DIR` serves a folder at `/doc/` so documents are same-origin with the viewer. Collect by pointing `annoquest collect` at the data directory. See [annoquest_server/README.md](annoquest_server/README.md).
 

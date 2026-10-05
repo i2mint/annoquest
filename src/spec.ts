@@ -148,6 +148,8 @@ export const Request = z.object({
   /** Let the reader annotate passages that no item points at. */
   allowExtra: z.boolean().default(true),
   createdAt: z.string().optional(),
+  /** Set by a server: which revision of this request (same id) this is, from 1. */
+  revision: z.number().int().positive().optional(),
 });
 export type Request = z.infer<typeof Request>;
 export type RequestInput = z.input<typeof Request>;
@@ -163,6 +165,8 @@ export const Answer = z.object({
   rev: z.number().int().nonnegative().default(0),
   /** The passage hash the reader saw when answering; differs from the item's when the passage changed. */
   passageHash: z.string().optional(),
+  /** Hash of the item (wording, options, target) when answered; differs once a revision changed the item. */
+  itemHash: z.string().optional(),
 });
 export type Answer = z.infer<typeof Answer>;
 

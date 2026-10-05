@@ -21,6 +21,9 @@ import {
   parseRequest,
   mergeResponses,
   latestPerReader,
+  itemHash,
+  diffRequests,
+  publishRevision,
   summaryMarkdown,
   toElicitation,
   type Responses,
@@ -217,5 +220,59 @@ describe('viewer CSS', () => {
     const rule = css.match(/\.doc-shadow\s*\{[^}]*\}/)![0];
     expect(rule).toContain('contain: paint');
     expect(rule).not.toMatch(/transform|will-change/);
+  });
+});
+
+describe('revisions', () => {
+  const v1 = () =>
+    createRequest({
+      id: 'rev-test-0001',
+      title: 'v1',
+      readers: [{ id: 'sam' }],
+      documents: [{ id: 'd', source: { kind: 'url', url: 'x' } }],
+      items: [
+        { id: 'keep', prompt: 'Same?' },
+        { id: 'reword', prompt: 'Old wording?' },
+        { id: 'drop', prompt: 'Going away?' },
+      ],
+    });
+
+  it('diffs a revision item by item, and refuses a changed id', () => {
+    const a = v1();
+    const b = createRequest({ ...a, title: 'v2', items: [a.items[0]!, { ...a.items[1]!, prompt: 'New wording?' }, { id: 'new', prompt: 'Added?' }] });
+    expect(diffRequests(a, b)).toEqual({ added: ['new'], removed: ['drop'], changed: ['reword'], unchanged: 1 });
+    expect(() => diffRequests(a, { ...b, id: 'another-id-1' })).toThrow(/keeps its request id/);
+    expect(itemHash(a.items[0]!)).toBe(itemHash({ ...a.items[0]!, minutes: 3 } as typeof a.items[0]));
+  });
+
+  it('marks answers to changed items as updated, and keeps answers to removed ones', () => {
+    const a = v1();
+    const at = '2026-10-05T10:00:00Z';
+    const answers = Object.fromEntries(a.items.map((i) => [i.id, { value: 'agree', at, rev: 1, itemHash: itemHash(i) }]));
+    const sam: Responses = { schema: 'annoquest/responses', version: 1, request: a.id, reader: { id: 'sam' }, answers, extras: [], removed: [], updatedAt: at };
+    const b = { ...createRequest({ ...a, items: [a.items[0]!, { ...a.items[1]!, prompt: 'New wording?' }] }), revision: 2 };
+    const s = summarize(b, [sam]);
+    expect(s.items.find((i) => i.id === 'keep')!.answers[0]!.updated).toBe(false);
+    expect(s.items.find((i) => i.id === 'reword')!.answers[0]!.updated).toBe(true);
+    expect(s.removed).toEqual([{ item: 'drop', reader: 'sam', value: 'agree', comment: undefined, at }]);
+    const md = summaryMarkdown(s);
+    expect(md).toContain('(revision 2)');
+    expect(md).toContain('answered before the item was updated');
+    expect(md).toContain('Answers to removed items');
+  });
+
+  it('publishes a revision through the API, with the sender\'s headers', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fake = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ id: 'rev-test-0001', revision: 2, created: true }), { status: 201, headers: { 'content-type': 'application/json' } });
+    }) as unknown as typeof fetch;
+    const r = await publishRevision({ ...v1(), revision: 1 }, { api: 'https://host/api/', headers: { Authorization: 'Bearer t' }, fetch: fake });
+    expect(r).toEqual({ revision: 2, created: true });
+    expect(calls[0]!.url).toBe('https://host/api/requests/rev-test-0001/revisions');
+    expect((calls[0]!.init.headers as Record<string, string>).Authorization).toBe('Bearer t');
+    expect(JSON.parse(calls[0]!.init.body as string).revision).toBeUndefined();
+    const refused = (async () => new Response(JSON.stringify({ detail: 'Only the sender' }), { status: 403, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
+    await expect(publishRevision(v1(), { api: '/api', fetch: refused })).rejects.toThrow(/Only the sender/);
   });
 });

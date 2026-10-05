@@ -7,7 +7,9 @@ With no header configured the app runs anonymously, for local use.
 
 Who may do what:
 
-- only a request's sender (its ``requester.email``, or an owner) may register it (``PUT``, write-once);
+- only a request's sender (its ``requester.email``, or an owner) may register it (``PUT``) and
+  publish revisions of it (``POST .../revisions``); revisions keep the id, are each written once,
+  and the latest is what is served; a ``PUT`` of any stored revision is accepted;
 - a request's readers (by email, when it lists any) and its owners may open it and answer;
 - a reader reads back only their own answers; owners (the request's ``requester.email``,
   plus ``owners``) read everyone's.
@@ -122,7 +124,7 @@ def mk_app(
         if not valid_id(rid):
             return None, _err(400, "Not a request id.")
         rec = store.get_request(rid)
-        return (rec["request"], None) if rec else (None, _err(404, "No such request. Open the link you were sent once, so it is registered."))
+        return ({**rec["request"], "revision": rec["revision"]}, None) if rec else (None, _err(404, "No such request. Open the link you were sent once, so it is registered."))
 
     async def whoami(req: Request):
         return JSONResponse({"user": identity(req)})
@@ -140,12 +142,20 @@ def mk_app(
                 return _err(400, "The body is not the annoquest request with this id.")
             if (header or dev_user) and not user:
                 return _err(401, "Sign in to register a request.")
-            existing = store.get_request(rid)
-            if existing is not None:
-                # Anyone holding a link that differs from what is registered under its id is told,
-                # sender or reader: a forged first registration cannot pass quietly.
-                same = json.dumps(existing.get("request"), sort_keys=True) == json.dumps(data, sort_keys=True)
-                return JSONResponse({"id": rid, "created": False}) if same else _err(409, "A different request is already registered under this id.")
+            revs = store.revisions(rid)
+            if revs:
+                # Anyone holding a link to an older or the current revision is fine; a body matching
+                # none is a different request under this id: say so, so it cannot pass quietly.
+                # `revision` is the server's annotation, not content: compare without it on both sides.
+                strip = lambda r: json.dumps({k: v for k, v in (r or {}).items() if k != "revision"}, sort_keys=True)  # noqa: E731
+                canon = strip(data)
+                hit = next((r for r in revs if strip(r.get("request")) == canon), None)
+                if hit:
+                    out = {"id": rid, "created": False}
+                    if may_read(user, revs[-1]["request"]):
+                        out |= {"revision": hit["revision"], "latest": revs[-1]["revision"]}
+                    return JSONResponse(out)
+                return _err(409, "A different request is already registered under this id.")
             # Only its sender registers a request: a reader who could register it first would own it.
             if not is_owner(user, data):
                 return _err(403, "Only the sender of this request (its requester) can register it.")
@@ -161,6 +171,47 @@ def mk_app(
         if not may_read(user, request):
             return _err(403, "This request was not sent to you.")
         return JSONResponse(request)
+
+    async def revisions_endpoint(req: Request):
+        rid = req.path_params["rid"]
+        user = identity(req)
+        if not valid_id(rid):
+            return _err(400, "Not a request id.")
+        revs = store.revisions(rid)
+        if not revs:
+            return _err(404, "No such request.")
+        first = revs[0]["request"]
+        # Ownership comes from the first registration: a revision cannot change who owns it.
+        if not is_owner(user, first):
+            return _err(403, "Only the sender of this request can revise it or read its history.")
+        if req.method == "GET":
+            return JSONResponse({"request": rid, "revisions": [{"revision": r["revision"], "at": r.get("at"), "by": r.get("by"), "items": len(r["request"].get("items") or []), "title": r["request"].get("title")} for r in revs]})
+        if (header or dev_user) and not user:
+            return _err(401, "Sign in to revise a request.")
+        data, err = await body_json(req, MAX_REQUEST_BYTES)
+        if err:
+            return err
+        if not isinstance(data, dict) or data.get("id") != rid or data.get("schema") != "annoquest/request":
+            return _err(400, "The body is not a revision of this request (same id, an annoquest request).")
+        if ((data.get("requester") or {}).get("email") or "").lower() != ((first.get("requester") or {}).get("email") or "").lower():
+            return _err(400, "A revision keeps the request's sender.")
+        data = {k: v for k, v in data.items() if k != "revision"}
+        latest = revs[-1]["request"]
+        if json.dumps({k: v for k, v in latest.items() if k != "revision"}, sort_keys=True) == json.dumps(data, sort_keys=True):
+            return JSONResponse({"id": rid, "revision": revs[-1]["revision"], "created": False})
+        n = store.add_revision(data, by=user)
+        return JSONResponse({"id": rid, "revision": n, "created": True}, status_code=201)
+
+    async def revision_n(req: Request):
+        rid, n = req.path_params["rid"], req.path_params["n"]
+        user = identity(req)
+        revs = store.revisions(rid) if valid_id(rid) else []
+        if not revs:
+            return _err(404, "No such request.")
+        if not is_owner(user, revs[0]["request"]):
+            return _err(403, "Only the sender of this request can read its history.")
+        hit = next((r for r in revs if str(r["revision"]) == n), None)
+        return JSONResponse({**hit["request"], "revision": hit["revision"]}) if hit else _err(404, "No such revision.")
 
     async def responses_endpoint(req: Request):
         rid = req.path_params["rid"]
@@ -219,6 +270,8 @@ def mk_app(
         Route("/api/whoami", whoami),
         Route("/api/requests/{rid}", request_endpoint, methods=["GET", "PUT"]),
         Route("/api/requests/{rid}/responses", responses_endpoint, methods=["GET", "POST"]),
+        Route("/api/requests/{rid}/revisions", revisions_endpoint, methods=["GET", "POST"]),
+        Route("/api/requests/{rid}/revisions/{n}", revision_n),
         Route("/api/requests/{rid}/responses/mine", mine),
         Route("/api/{rest:path}", api_404, methods=["GET", "POST", "PUT", "DELETE"]),
         Route("/", page),

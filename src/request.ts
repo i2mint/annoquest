@@ -153,3 +153,36 @@ export function checkRequest(request: Request, documents: Record<string, Documen
   };
   return { ok: results.every((r) => r.ok), items: results, request: checked };
 }
+
+/**
+ * A fingerprint of what an item asks (title, prompt, response type, labels, comment rule, target),
+ * so an answer can tell when a later revision of the request changed the question under it.
+ */
+export function itemHash(item: Pick<Item, 'title' | 'prompt' | 'response' | 'labels' | 'comment' | 'target' | 'doc'>): string {
+  const canon = (v: unknown): unknown =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).filter(([, x]) => x !== undefined).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, x]) => [k, canon(x)]))
+      : Array.isArray(v)
+        ? v.map(canon)
+        : v;
+  const { title, prompt, response, labels, comment, target, doc } = item;
+  return passageHash(JSON.stringify(canon({ title, prompt, response, labels, comment, target, doc })));
+}
+
+export interface RevisionDiff {
+  added: string[];
+  removed: string[];
+  changed: string[];
+  unchanged: number;
+}
+
+/** What a new version of a request changes, item by item (answers bind by item id). */
+export function diffRequests(before: Request, after: Request): RevisionDiff {
+  if (before.id !== after.id) throw new AnnoquestError('invalid', `A revision keeps its request id: ${after.id} is not ${before.id}.`);
+  const old = new Map(before.items.map((i) => [i.id, itemHash(i)]));
+  const now = new Map(after.items.map((i) => [i.id, itemHash(i)]));
+  const added = [...now.keys()].filter((k) => !old.has(k));
+  const removed = [...old.keys()].filter((k) => !now.has(k));
+  const changed = [...now.keys()].filter((k) => old.has(k) && old.get(k) !== now.get(k));
+  return { added, removed, changed, unchanged: now.size - added.length - changed.length };
+}

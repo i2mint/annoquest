@@ -38,6 +38,17 @@ Then one of:
 
 With a server, the sender must open the link once before it goes out (that registers it; only the sender can). Never send the link yourself unless you were asked to: hand it to the person who asked.
 
+## Revising a request already sent
+
+Keep the id (and the sender); change items, re-pin documents, add or drop items. Then:
+
+```bash
+annoquest check new.json --doc main=./page.html --write
+annoquest revise new.json --against published.json --viewer <server>   # diff + a publish link
+```
+
+The sender opens the link signed in and clicks *Publish as a new revision*; the link readers already have shows the new version. Keep item ids stable for items that mean the same thing (their answers carry over); give an item a new id when the question is really a different one. Readers see *updated since you last answered* on answered items that changed.
+
 ## 4. Collect
 
 ```bash

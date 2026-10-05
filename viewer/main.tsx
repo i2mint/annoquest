@@ -3,6 +3,7 @@
  * answers, wire saving, render.
  */
 import { createRoot } from 'react-dom/client';
+import { parseRequest } from '../src/request';
 import { Responses } from '../src/spec';
 import { App } from './App';
 import { loadRequest } from './load';
@@ -20,22 +21,39 @@ export interface ViewerOptions {
 export async function mountViewer(root: HTMLElement, { store = defaultStore() }: ViewerOptions = {}) {
   let sink: HttpSink | null = null;
   try {
-    const { request, origin, reader: readerParam } = await loadRequest();
-    document.title = request.title;
+    const loaded = await loadRequest();
+    let request = loaded.request;
+    const { origin, reader: readerParam } = loaded;
     const v = useViewer.getState();
     sink = makeSink(request, (s) => useViewer.getState().setSink(s));
     if (sink) v.setSink({ kind: 'saving' });
     const user = sink ? (await sink.whoami())?.toLowerCase() ?? null : null;
     v.setServerUser(user);
+    const isSender = !!user && user === request.requester?.email?.toLowerCase();
+    if (sink && origin !== 'spec') {
+      const reg = await sink.register(request);
+      if (reg.status === 409) {
+        // The server holds a different version under this id. From its sender, this link is
+        // a new revision to preview and publish; from anyone else, it is not the request.
+        if (isSender) v.setPublishable(true);
+        else throw new Error('This link does not match the request registered under its id, so answers cannot be sent. Ask its sender for a fresh link.');
+      } else {
+        // The id is one request with revisions: always show the latest one.
+        const latest = await sink.latest();
+        if (latest) request = parseRequest(latest);
+      }
+    }
+    document.title = request.title;
     const match =
       request.readers.find((r) => (user && r.email?.toLowerCase() === user) || (readerParam && r.id === readerParam)) ??
       (request.readers.length === 1 && !readerParam && !user ? request.readers[0] : undefined);
     const key = match?.id ?? user ?? readerParam ?? 'me';
     const reader = { ...match, key };
-    if (sink && origin !== 'spec') await sink.register(request); // throws on a conflicting registration
     // The requester opening their own request (not as a listed reader) is previewing it:
     // registering it is useful, sending answers as theirs is not.
-    const preview = !!sink && !!user && !match && user === request.requester?.email?.toLowerCase();
+    // A version the server does not hold is always a preview for its sender, even one listed as a
+    // reader: answers must never be sent against an unpublished version.
+    const preview = !!sink && isSender && (!match || useViewer.getState().publishable);
     if (preview) {
       sink!.dispose();
       sink = null;

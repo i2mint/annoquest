@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { PRIORITIES, type Answer, type Extra, type Item, type Mode, type Priority, type Reader, type Request, type Responses } from '../src/spec';
 import { resolveResponseType } from '../src/presets';
+import { itemHash } from '../src/request';
 import type { SinkState } from './persist';
 
 export type View = 'intro' | 'item' | 'pause' | 'done';
@@ -23,6 +24,8 @@ export interface ViewerState {
   localSaved: boolean;
   /** The requester is looking at their own request: nothing is sent. */
   preview: boolean;
+  /** The requester opened a version the server does not hold yet: it can be published as a revision. */
+  publishable: boolean;
   /** Fresh passage hashes from the live document, per item. */
   seen: Record<string, string | undefined>;
   init(p: { request: Request; reader: Partial<Reader> & { key: string }; responses: Responses }): void;
@@ -39,6 +42,7 @@ export interface ViewerState {
   setSeen(id: string, hash: string | undefined): void;
   setName(name: string): void;
   setPreview(on: boolean): void;
+  setPublishable(on: boolean): void;
 }
 
 const now = () => new Date().toISOString();
@@ -55,6 +59,7 @@ export const useViewer = create<ViewerState>()(
     sink: { kind: 'local' },
     localSaved: true,
     preview: false,
+    publishable: false,
     seen: {},
     init: ({ request, reader, responses }) =>
       set((s) => {
@@ -76,7 +81,16 @@ export const useViewer = create<ViewerState>()(
       set((s) => {
         if (!s.responses) return;
         const prev = s.responses.answers[itemId];
-        const next: Answer = { ...(prev ?? { rev: 0 }), ...patch, at: now(), rev: (prev?.rev ?? 0) + 1, passageHash: s.seen[itemId] ?? prev?.passageHash };
+        const item = s.request?.items.find((i) => i.id === itemId);
+        const next: Answer = {
+          ...(prev ?? { rev: 0 }),
+          ...patch,
+          at: now(),
+          rev: (prev?.rev ?? 0) + 1,
+          passageHash: s.seen[itemId] ?? prev?.passageHash,
+          // What the item asked when this answer was given, so a later revision shows as "updated".
+          itemHash: item ? itemHash(item) : prev?.itemHash,
+        };
         if (next.value === undefined) delete next.value;
         if (!next.comment) delete next.comment;
         s.responses.answers[itemId] = next;
@@ -106,6 +120,7 @@ export const useViewer = create<ViewerState>()(
     setSink: (sink) => set((s) => void (s.sink = sink)),
     setLocalSaved: (ok) => set((s) => void (s.localSaved = ok)),
     setPreview: (on) => set((s) => void (s.preview = on)),
+    setPublishable: (on) => set((s) => void (s.publishable = on)),
     setSeen: (id, hash) => set((s) => void (s.seen[id] = hash)),
     setName: (name) =>
       set((s) => {

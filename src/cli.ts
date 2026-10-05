@@ -17,7 +17,8 @@ import { toElicitation } from './elicit';
 import { AnnoquestError } from './errors';
 import { readLink, requestLink, specLink } from './link';
 import { presets } from './presets';
-import { checkRequest, createRequest, parseRequest, type CreateInput } from './request';
+import { checkRequest, createRequest, diffRequests, parseRequest, type CreateInput } from './request';
+import { publishRevision } from './remote';
 import { Request, Responses, type Request as RequestT } from './spec';
 
 const HELP = `annoquest — guided annotation requests
@@ -31,6 +32,10 @@ const HELP = `annoquest — guided annotation requests
                                                          a link carrying the request (#r=) or pointing at it (?spec=)
   annoquest collect <file|dir|reply-link>... --request <request.json> [--format json|markdown]
                                                          summarise responses: blocked, to discuss, waiting, aligned
+  annoquest revise <request.json> --viewer <url> [--against <published.json>] [--api <url> [--header 'K: V']...]
+                                                         a new revision under the same id: the diff, and a link whose
+                                                         preview its sender publishes (or --api to publish directly)
+  annoquest diff <before.json> <after.json>              what a revision changes: items added, removed, changed
   annoquest elicit <request.json> <item-id>               one item as an MCP elicitation schema
   annoquest presets                                      the built-in response types
   annoquest schema [request|responses]                   JSON Schema of the spec
@@ -123,6 +128,9 @@ async function main(argv: string[]): Promise<number> {
       request: { type: 'string' },
       format: { type: 'string' },
       json: { type: 'boolean' },
+      against: { type: 'string' },
+      api: { type: 'string' },
+      header: { type: 'string', multiple: true },
     },
   });
   const requestAt = (p: string | undefined) => {
@@ -176,6 +184,37 @@ async function main(argv: string[]): Promise<number> {
       const summary = summarize(request, responses);
       if (values.format === 'markdown') out(summaryMarkdown(summary));
       else out({ ...summary, rejected });
+      return 0;
+    }
+    case 'diff': {
+      const [a, b] = positionals;
+      if (!a || !b) throw new AnnoquestError('invalid', '`annoquest diff` needs two request files: before and after.');
+      out(diffRequests(parseRequest(readJson(a)), parseRequest(readJson(b))));
+      return 0;
+    }
+    case 'revise': {
+      const { request } = requestAt(positionals[0]);
+      const diff = values.against ? diffRequests(parseRequest(readJson(values.against)), request) : undefined;
+      if (values.api) {
+        const headers = Object.fromEntries(
+          (values.header ?? []).map((h) => {
+            const i = h.indexOf(':');
+            if (i < 1) throw new AnnoquestError('invalid', `--header wants 'Name: value', got "${h}".`);
+            return [h.slice(0, i).trim(), h.slice(i + 1).trim()];
+          }),
+        );
+        const published = await publishRevision(request, { api: values.api, headers, credentials: 'omit' });
+        out({ ok: true, id: request.id, ...published, ...(diff ? { diff } : {}) });
+        return 0;
+      }
+      if (!values.viewer) throw new AnnoquestError('invalid', '`annoquest revise` needs --viewer <url> (for the publish link) or --api <url> (to publish directly).');
+      const link = requestLink(request, values.viewer);
+      out({
+        ok: true,
+        id: request.id,
+        ...(diff ? { diff } : {}),
+        publish: { ...link, how: 'Its sender opens this link while signed in; the preview shows "Publish as a new revision". Readers keep the same link and see the latest revision.' },
+      });
       return 0;
     }
     case 'elicit': {

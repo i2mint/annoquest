@@ -10,6 +10,8 @@ import type { Doc, Item, Option, Request, ResponseType, Target } from '../src/sp
 import { DocFrame, frameSurface, shadowSurface, textFragmentUrl, type Anchored } from './docframe';
 import { mountShadowDocument } from './shadowdoc';
 import type { HttpSink } from './persist';
+import { publishRevision } from '../src/remote';
+import { itemHash } from '../src/request';
 import { answered, modeOf, queue, tiers, useViewer, type ViewerState } from './state';
 
 const TIER_LABEL = { must: 'Most important', should: 'Important', could: 'If you have time' } as const;
@@ -296,7 +298,28 @@ function Header({ request, sink }: { request: Request; sink: HttpSink | null }) 
   else if (s.kind === 'auth') status = { text: 'Saved on this device · sign in again to send', cls: 'warn', action: { label: 'Sign in', run: () => location.reload() } };
   else status = { text: s.message, cls: 'bad' };
   const preview = useViewer((x) => x.preview);
+  const publishable = useViewer((x) => x.publishable);
+  const [publishing, setPublishing] = useState<'idle' | 'busy' | string>('idle');
   if (preview) status = { text: 'Preview: you sent this request, so nothing you click here is sent', cls: 'busy' };
+  if (preview && publishable && request.sink.kind === 'http') {
+    const api = request.sink.url;
+    status =
+      publishing === 'busy'
+        ? { text: 'Publishing…', cls: 'busy' }
+        : {
+            text: publishing === 'idle' ? 'Preview of a new version, not published yet. Readers still see the current one.' : publishing,
+            cls: 'warn',
+            action: {
+              label: 'Publish as a new revision',
+              run: () => {
+                setPublishing('busy');
+                publishRevision(request, { api })
+                  .then(() => location.replace(`${location.pathname}?spec=${encodeURIComponent(`${api.replace(/\/$/, '')}/requests/${request.id}`)}`))
+                  .catch((e: Error) => setPublishing(`Not published: ${e.message}`));
+              },
+            },
+          };
+  }
   const who = reader.name ?? user ?? reader.email;
   return (
     <header className="panel-head">
@@ -403,6 +426,7 @@ function ItemCard(p: { request: Request; item: Item; anchored: Anchored | null; 
   const passage = anchored?.passage ?? item.target?.quote?.exact;
   const href = doc.href ?? (doc.source.kind === 'url' ? doc.source.url : undefined);
   const stale = !!(a?.passageHash && anchored?.passageHash && a.passageHash !== anchored.passageHash);
+  const updated = !!(a?.itemHash && (a.value !== undefined || a.comment) && a.itemHash !== itemHash(item));
 
   const pick = (o: Option) => {
     if (rt.kind === 'ack') return answer(item.id, { value: a?.value === true ? undefined : true });
@@ -442,6 +466,7 @@ function ItemCard(p: { request: Request; item: Item; anchored: Anchored | null; 
         <Linked text={item.prompt} />
       </p>
       {stale && <p className="warn-text">The passage changed after you answered; please check your answer still holds.</p>}
+      {updated && <p className="warn-text">This item was updated since you last answered it; please check your answer still holds.</p>}
       <Controls rt={rt} chosen={chosen} onPick={pick} />
       {item.comment !== 'none' && (
         <label className="field">

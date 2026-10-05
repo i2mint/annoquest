@@ -51,7 +51,10 @@ export type SinkState =
 export interface HttpSink {
   /** Who the server says the reader is (null when it does not say). */
   whoami(): Promise<string | null>;
-  register(request: Request): Promise<void>;
+  /** Register the request (PUT). 409: a version the server does not hold (a new one, if you are its sender). */
+  register(request: Request): Promise<{ status: number }>;
+  /** The latest revision the server holds. */
+  latest(): Promise<Request | undefined>;
   mine(): Promise<Responses | undefined>;
   schedule(value: Responses): void;
   flush(opts?: { keepalive?: boolean }): Promise<void>;
@@ -197,8 +200,14 @@ export function createHttpSink(
         credentials: 'same-origin',
       }).catch(() => null);
       if (res && res.status === 401) onState({ kind: 'auth' });
-      if (res && res.status === 409) {
-        throw new Error('This link does not match the request registered under its id, so answers cannot be sent. Ask its sender for a fresh link.');
+      return { status: res?.status ?? 0 };
+    },
+    async latest() {
+      try {
+        const res = await fetch(at(`/requests/${encodeURIComponent(requestId)}`), { headers: { Accept: 'application/json' }, credentials: 'same-origin' });
+        return res.ok ? ((await res.json()) as Request) : undefined;
+      } catch {
+        return undefined;
       }
     },
     async mine() {
@@ -228,3 +237,4 @@ export function createHttpSink(
     },
   };
 }
+

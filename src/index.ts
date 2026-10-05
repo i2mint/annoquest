@@ -25,8 +25,9 @@ export {
   type Match,
   type FindResult,
 } from './anchor';
-export { createRequest, parseRequest, checkRequest, checkItem, newId, docOf, type CreateInput, type CheckReport, type ItemCheck } from './request';
+export { createRequest, parseRequest, checkRequest, checkItem, newId, docOf, itemHash, diffRequests, type CreateInput, type CheckReport, type ItemCheck, type RevisionDiff } from './request';
 export { encodePayload, decodePayload, requestLink, specLink, replyLink, readLink, linkTier } from './link';
 export { bakeRequest, inlineDocuments, scriptSafeJson, REQUEST_SCRIPT_ID } from './bake';
 export { parseResponses, mergeResponses, latestPerReader, readerKey, summarize, summaryMarkdown, type Summary, type ItemSummary, type ItemStatus } from './collect';
 export { toElicitation, type Elicitation } from './elicit';
+export { publishRevision, type RemoteOptions } from './remote';

@@ -8,6 +8,7 @@
  * given to a passage that has since changed is `stale`.
  */
 import { resolveResponseType } from './presets';
+import { itemHash } from './request';
 import { Responses, type Answer, type Item, type Request, type Tone } from './spec';
 
 export type ItemStatus = 'blocked' | 'discuss' | 'pending' | 'aligned' | 'neutral';
@@ -20,6 +21,8 @@ export interface ReaderAnswer {
   comment?: string;
   at?: string;
   stale: boolean;
+  /** The item was changed by a later revision after this answer was given. */
+  updated: boolean;
 }
 
 export interface ItemSummary {
@@ -39,6 +42,9 @@ export interface Summary {
   counts: Record<ItemStatus, number>;
   items: ItemSummary[];
   extras: Array<{ reader: string; quote?: string; section?: string; comment: string; at: string }>;
+  /** Answers to items a later revision removed: kept, listed, not counted. */
+  removed: Array<{ item: string; reader: string; value?: Answer['value']; comment?: string; at?: string }>;
+  revision?: number;
 }
 
 /**
@@ -150,6 +156,7 @@ export function summarize(request: Request, all: Responses[]): Summary {
         comment: a.comment,
         at: a.at,
         stale: !!(item.passageHash && a.passageHash && item.passageHash !== a.passageHash),
+        updated: !!(a.itemHash && a.itemHash !== itemHash(item)),
       });
     }
     const tones = answers.map((a) => a.tone);
@@ -179,14 +186,20 @@ export function summarize(request: Request, all: Responses[]): Summary {
     r.extras.map((x) => ({ reader: readerKey(r), quote: x.target.quote?.exact, section: x.target.section, comment: x.comment, at: x.at })),
   );
   items.sort((a, b) => RANK[a.status] - RANK[b.status]);
-  return { request: request.id, title: request.title, readers, counts, items, extras };
+  const current = new Set(request.items.map((i) => i.id));
+  const removed = latest.flatMap((r) =>
+    Object.entries(r.answers)
+      .filter(([id, a]) => !current.has(id) && (a.value !== undefined || a.comment))
+      .map(([item, a]) => ({ item, reader: readerKey(r), value: a.value, comment: a.comment, at: a.at })),
+  );
+  return { request: request.id, title: request.title, readers, counts, items, extras, removed, revision: request.revision };
 }
 
 const ICON: Record<ItemStatus, string> = { blocked: '⛔', discuss: '💬', pending: '⏳', neutral: '·', aligned: '✅' };
 
 /** The summary as Markdown, worst first: what needs talking about, then what is waiting, then what is settled. */
 export function summaryMarkdown(s: Summary): string {
-  const out: string[] = [`# ${s.title} — responses`, ''];
+  const out: string[] = [`# ${s.title} — responses${s.revision ? ` (revision ${s.revision})` : ''}`, ''];
   out.push(
     `**${s.counts.blocked} blocked · ${s.counts.discuss} to discuss · ${s.counts.pending} waiting · ${s.counts.aligned} aligned · ${s.counts.neutral} neutral**`,
     '',
@@ -196,9 +209,14 @@ export function summaryMarkdown(s: Summary): string {
   for (const it of s.items) {
     out.push(`## ${ICON[it.status]} ${it.title ?? it.id} — ${it.status} (${it.priority})`, '', `> ${it.prompt.replace(/\n/g, ' ')}`, '');
     for (const a of it.answers) {
-      out.push(`- **${a.reader}**: ${a.labels.join(', ') || '(comment)'}${a.stale ? ' *(passage changed since)*' : ''}${a.comment ? ` — ${a.comment.replace(/\n/g, ' ')}` : ''}`);
+      out.push(`- **${a.reader}**: ${a.labels.join(', ') || '(comment)'}${a.updated ? ' *(answered before the item was updated)*' : ''}${a.stale ? ' *(passage changed since)*' : ''}${a.comment ? ` — ${a.comment.replace(/\n/g, ' ')}` : ''}`);
     }
     if (it.missing.length) out.push(`- not yet: ${it.missing.join(', ')}`);
+    out.push('');
+  }
+  if (s.removed.length) {
+    out.push('## Answers to removed items', '');
+    for (const x of s.removed) out.push(`- **${x.reader}** on \`${x.item}\`: ${([] as unknown[]).concat(x.value ?? []).join(', ') || '(comment)'}${x.comment ? ` — ${x.comment.replace(/\n/g, ' ')}` : ''}`);
     out.push('');
   }
   if (s.extras.length) {

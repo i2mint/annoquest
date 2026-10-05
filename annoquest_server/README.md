@@ -22,8 +22,10 @@ Only configure an identity header that your gateway **overwrites** on every requ
 | Method | Path | Who | What |
 |---|---|---|---|
 | GET | `/api/whoami` | anyone | `{"user": …}` |
-| PUT | `/api/requests/<id>` | signed in | register a request once (the viewer does this when opened from a `#r=` link) |
-| GET | `/api/requests/<id>` | listed readers, owners | the request |
+| PUT | `/api/requests/<id>` | the sender (first time); anyone holding a stored revision | register a request once (the viewer does this when opened from a `#r=` link); a body matching no revision is a 409 |
+| GET | `/api/requests/<id>` | listed readers, owners | the latest revision of the request (with `revision`) |
+| POST | `/api/requests/<id>/revisions` | the sender, owners | publish a new revision (same id and sender; each stored once, never overwritten) |
+| GET | `/api/requests/<id>/revisions[/<n>]` | the sender, owners | the history, or one revision |
 | POST | `/api/requests/<id>/responses` | listed readers, owners | append a save; the server sets `by` |
 | GET | `/api/requests/<id>/responses/mine` | the caller | their latest save |
 | GET | `/api/requests/<id>/responses` | owners | everyone's latest |

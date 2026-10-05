@@ -48,7 +48,7 @@ def test_requests_are_write_once(client):
     c, _ = client
     assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ada@example.org")).status_code == 201
     other = {**REQUEST, "title": "hijacked"}
-    assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ADA@example.org")).json() == {"id": RID, "created": False}
+    assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ADA@example.org")).json() == {"id": RID, "created": False, "revision": 1, "latest": 1}
     assert c.put(f"/api/requests/{RID}", json=other, headers=as_("ada@example.org")).status_code == 409
     assert c.get(f"/api/requests/{RID}", headers=as_("sam@example.org")).json()["title"] == "T"
     assert c.put("/api/requests/other-id-99", json=REQUEST, headers=as_("ada@example.org")).status_code == 400
@@ -167,3 +167,45 @@ def test_removed_comments_stay_removed(client):
     later = {**responses({}, at="2026-10-02T11:00:00Z"), "extras": [], "removed": ["x1"]}
     c.post(f"/api/requests/{RID}/responses", json=later, headers=as_("sam@example.org"))
     assert c.get(f"/api/requests/{RID}/responses/mine", headers=as_("sam@example.org")).json()["extras"] == []
+
+
+def test_revisions_keep_the_id_and_the_history(client):
+    c, data = client
+    c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ada@example.org"))
+    v2 = {**REQUEST, "title": "T v2", "items": [{"id": "a", "prompt": "? (reworded)"}, {"id": "b", "prompt": "new"}]}
+    # Only the sender revises; a reader cannot.
+    assert c.post(f"/api/requests/{RID}/revisions", json=v2, headers=as_("sam@example.org")).status_code == 403
+    r = c.post(f"/api/requests/{RID}/revisions", json=v2, headers=as_("ada@example.org"))
+    assert r.status_code == 201 and r.json()["revision"] == 2
+    # Publishing the same content again is not a new revision.
+    assert c.post(f"/api/requests/{RID}/revisions", json=v2, headers=as_("ada@example.org")).json() == {"id": RID, "revision": 2, "created": False}
+    # Readers get the latest, with its number, at the same id.
+    latest = c.get(f"/api/requests/{RID}", headers=as_("sam@example.org")).json()
+    assert latest["title"] == "T v2" and latest["revision"] == 2
+    # Nothing was overwritten: revision 1 is still on disk, and the owner can list and read it.
+    assert json.loads((data / "requests" / f"{RID}.json").read_text())["request"]["title"] == "T"
+    hist = c.get(f"/api/requests/{RID}/revisions", headers=as_("ada@example.org")).json()["revisions"]
+    assert [h["revision"] for h in hist] == [1, 2]
+    assert c.get(f"/api/requests/{RID}/revisions/1", headers=as_("ada@example.org")).json()["title"] == "T"
+    assert c.get(f"/api/requests/{RID}/revisions", headers=as_("sam@example.org")).status_code == 403
+    # A link to an older revision still opens (it is one of ours); a body matching none is a conflict.
+    assert c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("sam@example.org")).json()["latest"] == 2
+    assert c.put(f"/api/requests/{RID}", json={**REQUEST, "title": "forged"}, headers=as_("sam@example.org")).status_code == 409
+
+
+def test_a_revision_cannot_change_id_or_sender(client):
+    c, _ = client
+    c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ada@example.org"))
+    assert c.post(f"/api/requests/{RID}/revisions", json={**REQUEST, "id": "other-id-123"}, headers=as_("ada@example.org")).status_code == 400
+    moved = {**REQUEST, "requester": {"email": "eve@example.org"}}
+    assert c.post(f"/api/requests/{RID}/revisions", json=moved, headers=as_("ada@example.org")).status_code == 400
+    assert c.post("/api/requests/never-registered/revisions", json={**REQUEST, "id": "never-registered"}, headers=as_("ada@example.org")).status_code == 404
+
+
+def test_answers_survive_a_revision(client):
+    c, _ = client
+    c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ada@example.org"))
+    c.post(f"/api/requests/{RID}/responses", json=responses({"a": {"value": "agree", "at": "t", "rev": 1}}), headers=as_("sam@example.org"))
+    c.post(f"/api/requests/{RID}/revisions", json={**REQUEST, "items": [{"id": "b", "prompt": "new"}]}, headers=as_("ada@example.org"))
+    mine = c.get(f"/api/requests/{RID}/responses/mine", headers=as_("sam@example.org")).json()
+    assert mine["answers"]["a"]["value"] == "agree"

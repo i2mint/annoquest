@@ -51,7 +51,9 @@ export async function mountViewer(root: HTMLElement, { store = defaultStore() }:
     const reader = { ...match, key };
     // The requester opening their own request (not as a listed reader) is previewing it:
     // registering it is useful, sending answers as theirs is not.
-    const preview = !!sink && isSender && !match;
+    // A version the server does not hold is always a preview for its sender, even one listed as a
+    // reader: answers must never be sent against an unpublished version.
+    const preview = !!sink && isSender && (!match || useViewer.getState().publishable);
     if (preview) {
       sink!.dispose();
       sink = null;

@@ -209,3 +209,21 @@ def test_answers_survive_a_revision(client):
     c.post(f"/api/requests/{RID}/revisions", json={**REQUEST, "items": [{"id": "b", "prompt": "new"}]}, headers=as_("ada@example.org"))
     mine = c.get(f"/api/requests/{RID}/responses/mine", headers=as_("sam@example.org")).json()
     assert mine["answers"]["a"]["value"] == "agree"
+
+
+def test_a_link_carrying_the_server_revision_field_still_opens(client):
+    c, _ = client
+    c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ada@example.org"))
+    c.post(f"/api/requests/{RID}/revisions", json={**REQUEST, "title": "v2"}, headers=as_("ada@example.org"))
+    served = c.get(f"/api/requests/{RID}", headers=as_("sam@example.org")).json()
+    assert served["revision"] == 2
+    assert c.put(f"/api/requests/{RID}", json=served, headers=as_("sam@example.org")).json()["latest"] == 2
+
+
+def test_a_damaged_revision_file_does_not_block_revising(client):
+    c, data = client
+    c.put(f"/api/requests/{RID}", json=REQUEST, headers=as_("ada@example.org"))
+    c.post(f"/api/requests/{RID}/revisions", json={**REQUEST, "title": "v2"}, headers=as_("ada@example.org"))
+    next((data / "revisions" / RID).glob("*.json")).write_text("{damaged")
+    r = c.post(f"/api/requests/{RID}/revisions", json={**REQUEST, "title": "v3"}, headers=as_("ada@example.org"))
+    assert r.status_code == 201 and r.json()["revision"] == 3

@@ -70,7 +70,9 @@ export interface RequestLinkOptions {
 export function requestLink(request: Request, viewerUrl: string, { reader }: RequestLinkOptions = {}) {
   const u = new URL(viewerUrl);
   if (reader) u.searchParams.set('reader', reader);
-  u.hash = 'r=' + encodePayload(request);
+  // `revision` is a server's annotation, not content: a link carries the request as authored.
+  const { revision: _serverSet, ...authored } = request;
+  u.hash = 'r=' + encodePayload(authored);
   const url = u.toString();
   return { url, length: url.length, tier: linkTier(url) };
 }

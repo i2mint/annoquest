@@ -3,7 +3,7 @@
 Layout under the data directory::
 
     requests/<request id>.json                      {"request", "by", "at"}       written once (revision 1)
-    revisions/<request id>/<NNNN>.json              {"request", "by", "at", "revision"}  revisions 2.., each once
+    revisions/<request id>/<NNNNNN>.json              {"request", "by", "at", "revision"}  revisions 2.., each once
     responses/<request id>/<reader key>/<stamp>.json {"responses", "by", "at"}     one file per save
 
 Nothing is ever rewritten, so a backup that keeps one copy per file keeps the whole
@@ -136,7 +136,7 @@ class Store:
         first = json.loads(p.read_text(encoding="utf-8"))
         out = [{**first, "revision": 1}]
         d = self.root / "revisions" / request_id
-        for f in sorted(d.glob("*.json")) if d.is_dir() else []:
+        for f in sorted(d.glob("*.json"), key=lambda f: int(f.stem) if f.stem.isdigit() else 0) if d.is_dir() else []:
             try:
                 out.append(json.loads(f.read_text(encoding="utf-8")))
             except ValueError:
@@ -146,9 +146,12 @@ class Store:
     def add_revision(self, request: dict, *, by: str | None) -> int:
         """Store a new revision of an existing request; returns its number. Never overwrites."""
         rid = request["id"]
+        d = self.root / "revisions" / rid
         for _ in range(20):  # a concurrent writer may take the number: take the next
-            n = len(self.revisions(rid)) + 1
-            path = self.root / "revisions" / rid / f"{n:04d}.json"
+            # Number from the highest file name, not a count: a damaged file must not block revising.
+            taken = [int(f.stem) for f in d.glob("*.json") if f.stem.isdigit()] if d.is_dir() else []
+            n = max([1, *taken]) + 1
+            path = d / f"{n:06d}.json"
             if _write_once(path, {"request": request, "by": by, "at": _now(), "revision": n}):
                 return n
         raise RuntimeError("could not store the revision")

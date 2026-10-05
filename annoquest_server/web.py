@@ -146,10 +146,15 @@ def mk_app(
             if revs:
                 # Anyone holding a link to an older or the current revision is fine; a body matching
                 # none is a different request under this id: say so, so it cannot pass quietly.
-                canon = json.dumps(data, sort_keys=True)
-                hit = next((r for r in revs if json.dumps(r.get("request"), sort_keys=True) == canon), None)
+                # `revision` is the server's annotation, not content: compare without it on both sides.
+                strip = lambda r: json.dumps({k: v for k, v in (r or {}).items() if k != "revision"}, sort_keys=True)  # noqa: E731
+                canon = strip(data)
+                hit = next((r for r in revs if strip(r.get("request")) == canon), None)
                 if hit:
-                    return JSONResponse({"id": rid, "created": False, "revision": hit["revision"], "latest": revs[-1]["revision"]})
+                    out = {"id": rid, "created": False}
+                    if may_read(user, revs[-1]["request"]):
+                        out |= {"revision": hit["revision"], "latest": revs[-1]["revision"]}
+                    return JSONResponse(out)
                 return _err(409, "A different request is already registered under this id.")
             # Only its sender registers a request: a reader who could register it first would own it.
             if not is_owner(user, data):

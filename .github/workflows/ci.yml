@@ -1,3 +1,6 @@
+# npm auth: trusted publishing (OIDC) only. Never add an NPM_TOKEN secret.
+# npmjs.com -> each package -> Settings -> Trusted Publisher -> GitHub Actions:
+#   owner/repo = i2mint/annoquest, workflow filename = ci.yml, no environment.
 name: CI
 
 on:
@@ -91,15 +94,24 @@ jobs:
       - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
+      - name: Ensure npm >= 11.5.1 (required for OIDC trusted publishing)
+        run: |
+          if ! node -e "const [a,b,c]=process.argv[1].split('.').map(Number);process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)" "$(npm --version)"; then
+            npm install -g npm@^11.5.1
+          fi
+          npm --version
       - id: version
         run: |
           set -euo pipefail
           name=$(node -p "require('./package.json').name")
           version=$(node -p "require('./package.json').version")
-          if npm view "${name}@${version}" version >/dev/null 2>&1; then
+          if ! npm view "${name}" version >/dev/null 2>&1; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::${name} is not on npm yet. Trusted publishing cannot do a first publish: publish the first version locally, then add the Trusted Publisher. See the fleet npm-publishing skill."
+          elif npm view "${name}@${version}" version >/dev/null 2>&1; then
             echo "new=false" >> "$GITHUB_OUTPUT"; echo "${name}@${version} already on npm; nothing to publish."
           else
             echo "new=true" >> "$GITHUB_OUTPUT"; echo "version=${version}" >> "$GITHUB_OUTPUT"
@@ -108,8 +120,6 @@ jobs:
         run: pnpm install --frozen-lockfile && pnpm build
       - if: steps.version.outputs.new == 'true'
         run: pnpm publish --access public --no-git-checks --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - if: steps.version.outputs.new == 'true'
         run: |
           git config user.name "github-actions[bot]"

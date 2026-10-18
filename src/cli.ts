@@ -18,6 +18,7 @@ import { AnnoquestError } from './errors';
 import { readLink, requestLink, specLink } from './link';
 import { presets } from './presets';
 import { checkRequest, createRequest, diffRequests, parseRequest, type CreateInput } from './request';
+import { exportLog, exportMarkdown, foldBatches, isBatch, parseBatches } from './events';
 import { publishRevision } from './remote';
 import { Request, Responses, type Request as RequestT } from './spec';
 
@@ -31,7 +32,12 @@ const HELP = `annoquest — guided annotation requests
   annoquest link <request.json> --viewer <url> [--reader id] [--spec-url url]
                                                          a link carrying the request (#r=) or pointing at it (?spec=)
   annoquest collect <file|dir|reply-link>... --request <request.json> [--format json|markdown]
-                                                         summarise responses: blocked, to discuss, waiting, aligned
+                                                         summarise responses (saved documents or event logs):
+                                                         blocked, to discuss, waiting, aligned
+  annoquest export <file|dir>... [--request <request.json>] [--format json|markdown]
+                                                         from a request's event logs: each reader's final state
+                                                         (answers, comments) and where they read, for how long
+  annoquest viewer [--api <url>] [--out page.html]       the built viewer, pointed at a server's API (for hosting)
   annoquest revise <request.json> --viewer <url> [--against <published.json>] [--api <url> [--header 'K: V']...]
                                                          a new revision under the same id: the diff, and a link whose
                                                          preview its sender publishes (or --api to publish directly)
@@ -180,10 +186,38 @@ async function main(argv: string[]): Promise<number> {
     }
     case 'collect': {
       const { request } = requestAt(values.request);
-      const { responses, rejected } = parseResponses(collectInputs(positionals), request);
+      const inputs = collectInputs(positionals);
+      // Event logs fold into one responses document per reader; saved documents are read as they are.
+      const { batches } = parseBatches(inputs.filter(isBatch), request);
+      const folded = foldBatches(request.id, batches).map((r) => r.responses);
+      const { responses, rejected } = parseResponses([...inputs.filter((v) => !isBatch(v)), ...folded], request);
       const summary = summarize(request, responses);
       if (values.format === 'markdown') out(summaryMarkdown(summary));
       else out({ ...summary, rejected });
+      return 0;
+    }
+    case 'export': {
+      const request = values.request ? requestAt(values.request).request : undefined;
+      // Batch files from a server's events/ folder, or `python -m annoquest_server events <id>` output ({batches: […]}).
+      const inputs = collectInputs(positionals).flatMap((v) => (v && typeof v === 'object' && Array.isArray((v as { batches?: unknown }).batches) ? (v as { batches: unknown[] }).batches : [v]));
+      const { batches, rejected } = parseBatches(inputs.filter(isBatch), request);
+      if (!batches.length) throw new AnnoquestError('invalid', `No event logs in ${positionals.join(', ') || '(nothing given)'}. Point at a server's events/<request id> folder.`);
+      const ids = [...new Set(batches.map((b) => b.request))];
+      if (!request && ids.length > 1) throw new AnnoquestError('invalid', `Events from several requests (${ids.join(', ')}); pass --request or one folder.`);
+      const x = exportLog(batches, { request, requestId: ids[0] });
+      out(values.format === 'markdown' ? exportMarkdown(x, { request }) : { ...x, rejected });
+      return 0;
+    }
+    case 'viewer': {
+      let page = viewerHtml();
+      if (values.api) {
+        const meta = `<meta name="annoquest-api" content="${values.api.replace(/[&"<>]/g, (c) => `&#${c.charCodeAt(0)};`)}">`;
+        page = /<head[^>]*>/i.test(page) ? page.replace(/<head([^>]*)>/i, (m) => `${m}${meta}`) : meta + page;
+      }
+      if (values.out) {
+        writeFileSync(values.out, page);
+        out({ ok: true, out: values.out, bytes: page.length, api: values.api ?? '/api' });
+      } else out(page);
       return 0;
     }
     case 'diff': {

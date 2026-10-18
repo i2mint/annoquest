@@ -1,6 +1,6 @@
 {
   "name": "annoquest",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Guided annotation requests, agent-first: give a reader documents and a prioritised list of items to read, check and annotate; answers autosave and autosubmit; collect them as an alignment summary.",
   "type": "module",
   "main": "dist/index.cjs",

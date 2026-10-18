@@ -1,6 +1,6 @@
 ---
 name: annoquest
-description: Build a guided annotation request with annoquest — give someone documents plus a prioritised list of passages to read, check off, agree or disagree with, sign off, label or comment on, then collect their answers into an aligned / to-discuss / blocked / waiting summary. Use when asked to "get X to review / read / sign off / check / annotate this doc", "track where we are aligned", "ask them to confirm these points", "send a read-and-acknowledge", "collect structured feedback on a document", or to turn a list of questions about a document into something a person can answer in a browser.
+description: Build a guided annotation request with annoquest — give someone documents plus a prioritised list of passages to read, check off, agree or disagree with, sign off, label or comment on, then collect their answers into an aligned / to-discuss / blocked / waiting summary — or send a freeform link to any web page that lets them highlight and comment on anything, with every comment and page view sent as it happens and an export of their comments and reading time. Use when asked to "send them a page to annotate", "let them highlight and comment on this URL", "see how long they spent reading it", or when asked to "get X to review / read / sign off / check / annotate this doc", "track where we are aligned", "ask them to confirm these points", "send a read-and-acknowledge", "collect structured feedback on a document", or to turn a list of questions about a document into something a person can answer in a browser.
 ---
 
 # annoquest — making a guided annotation request
@@ -58,6 +58,21 @@ annoquest collect <reply-link | responses.json | server-data-dir>... --request r
 ```
 
 Worst first: blocked (someone said no; read their reason), to discuss, waiting (who has not answered), aligned. `stale` marks answers given to a passage that has since changed. Report the blocked and to-discuss items with the reader's comments; do not average them away.
+
+## Freeform: any page, highlight and comment, reading tracked
+
+No items to write: one link opens a page (and the pages it links to on the same site) for the reader to highlight and comment on. Every comment, edit and page view is sent as it happens; the reader has nothing to submit, and the instructions they see say so (including that page views and time are recorded).
+
+```bash
+ssh <server> python -m annoquest_server link <page url> --viewer <server viewer url> [--reader <id>]   # prints the link
+ssh <server> python -m annoquest_server events <request id> > events.json     # later: everything sent
+annoquest export events.json --format markdown                                # each reader's comments (page, passage, occurrence, comment) and time per page
+```
+
+- `--reader` (or `&user_id=` in the link) names the reader; without it each browser gets its own random id. Make one link per person when you need to tell people apart.
+- The request id is in the export and in the server's `events/` folder (`c-…`); `annoquest collect` also reads event logs, so a guided request with a server sink is collected the same way.
+- A page on the viewer's own site is shown live, with its scripts (single-page apps work). Any other site goes through the server's proxy, without scripts: pages that only render with JavaScript show only what the server sends.
+- A guided request can be freeform too: items plus `"allowExtra": true` (the default), and `"track": true` to record reading.
 
 ## Gotchas
 

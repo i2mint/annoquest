@@ -150,3 +150,17 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
   .doc-pane { border-right: 0; border-bottom: 1px solid var(--line); }
   .tier-progress { grid-template-columns: 8em 1fr auto; }
 }
+
+.comments h3 { font-size: 14px; margin: 0 0 6px; }
+.comments ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.comment { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.comment.open { border-color: var(--should); }
+.comment p { margin: 0; font-size: 13.5px; }
+.comment .quote { color: var(--muted); font-style: italic; }
+.comment .text { white-space: pre-line; }
+.comment .page { font-size: 12px; overflow-wrap: anywhere; }
+.danger { color: var(--blk); margin-left: auto; }
+
+@media (max-width: 760px) {
+  .layout.freeform { grid-template-rows: 60vh minmax(0, 1fr); }
+}

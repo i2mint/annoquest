@@ -43,8 +43,14 @@ export type ResponseType = z.infer<typeof ResponseType>;
 // ---- documents and targets ------------------------------------------------
 
 export const DocumentSource = z.discriminatedUnion('kind', [
-  /** A live page. Same-origin with the viewer for highlights; otherwise the passage is shown in the card. */
-  z.object({ kind: z.literal('url'), url: z.string().min(1) }),
+  /**
+   * A live page. Same-origin with the viewer for highlights; otherwise the passage is shown in the card.
+   * Its own scripts are off unless `scripts` is true: turn them on for a page that draws its content
+   * with JavaScript (a dashboard, a single-page app). Only for pages you trust: a same-origin page with
+   * scripts can reach the viewer, as any page on that origin already can. Passages are re-found
+   * whenever the page re-renders.
+   */
+  z.object({ kind: z.literal('url'), url: z.string().min(1), scripts: z.boolean().optional() }),
   /** A snapshot baked into the request page. */
   z.object({ kind: z.literal('inline'), html: z.string(), baseUrl: z.string().optional() }),
 ]);

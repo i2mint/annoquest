@@ -53,7 +53,7 @@ Override the wording per item with `labels` (item-specific wording gets better a
 
 | Seam | Default (no server) | Also built in |
 |---|---|---|
-| Document source | `inline`: `bake --inline` snapshots the HTML into the page | `url`: a live page; same-origin gets highlights, cross-origin shows the passage with a `#:~:text=` link |
+| Document source | `inline`: `bake --inline` snapshots the HTML into the page | `url`: a live page; same-origin gets highlights, cross-origin shows the passage with a `#:~:text=` link. Its scripts stay off unless `"scripts": true` (for a page drawn by JavaScript, that you trust); passages are then re-found whenever it re-renders |
 | Delivery | a baked HTML file | `annoquest link`: the request in the link fragment (`#r=`), or `?spec=<url>` to a hosted JSON |
 | Device storage | localStorage, through a zodal `DataProvider` | any `DataProvider` |
 | Sink | `local`: answers stay on the device; the reader sends a reply link or a file | `http`: autosubmit to an annoquest server (`"sink": {"kind": "http", "url": "/api"}`) |

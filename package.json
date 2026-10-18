@@ -1,6 +1,6 @@
 {
   "name": "annoquest",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Guided annotation requests, agent-first: give a reader documents and a prioritised list of items to read, check and annotate; answers autosave and autosubmit; collect them as an alignment summary.",
   "type": "module",
   "main": "dist/index.cjs",
@@ -36,7 +36,7 @@
   "scripts": {
     "build": "pnpm build:viewer && pnpm build:lib",
     "build:lib": "tsup",
-    "build:viewer": "vite build --config viewer/vite.config.ts && node -e \"require('fs').copyFileSync('dist/viewer/index.html','dist/viewer.html')\"",
+    "build:viewer": "vite build --config viewer/vite.config.ts && node scripts/finalize-viewer.mjs",
     "dev": "vite --config viewer/vite.config.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

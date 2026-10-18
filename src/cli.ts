@@ -111,7 +111,13 @@ function collectInputs(args: string[]): unknown[] {
     }
     const st = statSync(p);
     if (st.isDirectory()) for (const f of readdirSync(p).sort()) visit(join(p, f));
-    else if (p.endsWith('.json')) values.push(readJson(p));
+    else if (p.endsWith('.json')) {
+      // `python -m annoquest_server events <id>` prints {request, batches: […]}: its batches count one by one.
+      const v = readJson(p);
+      const batches = v && typeof v === 'object' ? (v as { batches?: unknown }).batches : undefined;
+      if (Array.isArray(batches)) values.push(...batches);
+      else values.push(v);
+    }
   };
   args.forEach(visit);
   return values;
@@ -198,8 +204,7 @@ async function main(argv: string[]): Promise<number> {
     }
     case 'export': {
       const request = values.request ? requestAt(values.request).request : undefined;
-      // Batch files from a server's events/ folder, or `python -m annoquest_server events <id>` output ({batches: […]}).
-      const inputs = collectInputs(positionals).flatMap((v) => (v && typeof v === 'object' && Array.isArray((v as { batches?: unknown }).batches) ? (v as { batches: unknown[] }).batches : [v]));
+      const inputs = collectInputs(positionals);
       const { batches, rejected } = parseBatches(inputs.filter(isBatch), request);
       if (!batches.length) throw new AnnoquestError('invalid', `No event logs in ${positionals.join(', ') || '(nothing given)'}. Point at a server's events/<request id> folder.`);
       const ids = [...new Set(batches.map((b) => b.request))];

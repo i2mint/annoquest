@@ -239,9 +239,30 @@ function DocView({ doc, hidden, onFrame, onRefresh }: { doc: Doc; hidden: boolea
     });
     watcher.current.observe(frame.surface.body, { childList: true, subtree: true, characterData: true });
   };
+  // The document a DocFrame was made for: a live page is attached as soon as its DOM is parsed
+  // (its load event can be seconds later, after fonts and images), and not again on load.
+  const attached = useRef<Document | null>(null);
+  useEffect(() => {
+    if (!live) return;
+    const poll = window.setInterval(() => {
+      let d: Document | null = null;
+      try {
+        d = ref.current?.contentDocument ?? null;
+      } catch {
+        // cross-origin: onLoad shows it as detached
+      }
+      if (!d || d.URL === 'about:blank' || d.readyState === 'loading' || attached.current === d) return;
+      window.clearInterval(poll);
+      onLoad();
+    }, 100);
+    return () => window.clearInterval(poll);
+  }, [live]);
   const onLoad = () => {
     try {
-      const frame = new DocFrame(frameSurface(ref.current!));
+      const surface = frameSurface(ref.current!);
+      if (live && attached.current === surface.doc) return;
+      attached.current = surface.doc;
+      const frame = new DocFrame(surface);
       onFrame(doc.id, frame);
       if (live) watch(frame);
     } catch {

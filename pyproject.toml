@@ -1,6 +1,6 @@
 [project]
 name = "annoquest-server"
-version = "0.2.0"
+version = "0.2.1"
 description = "The server adapter for annoquest guided annotation requests: serves the viewer, keeps requests write-once and responses append-only, and stamps identity from a forward-auth header."
 readme = "annoquest_server/README.md"
 license = "MIT"

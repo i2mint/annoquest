@@ -327,7 +327,7 @@ function DocView({ doc, hidden, onFrame, onRefresh, tracker }: { doc: Doc; hidde
           This document is on another site, so passages can't be highlighted here. Each item shows its passage, with a link to it in the original.
         </p>
       )}
-      <iframe ref={ref} title={doc.title ?? doc.id} src={src} srcDoc={srcDoc} onLoad={onLoad} sandbox={live ? 'allow-same-origin allow-scripts allow-popups' : 'allow-same-origin allow-popups'} />
+      <iframe ref={ref} title={doc.title ?? doc.id} src={src} srcDoc={srcDoc} onLoad={onLoad} sandbox={live ? 'allow-same-origin allow-scripts allow-popups allow-popups-to-escape-sandbox' : 'allow-same-origin allow-popups allow-popups-to-escape-sandbox'} />
     </div>
   );
 }

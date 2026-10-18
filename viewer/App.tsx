@@ -67,13 +67,20 @@ function Guide({ request, sink }: { request: Request; sink: HttpSink | null }) {
 
   // Paint and reveal whenever the current item, answers, or a frame change.
   const extras = responses?.extras ?? [];
+  const paint = (docId: string, f: DocFrame) => {
+    const mine = items.filter((i) => docOfItem(i).id === docId);
+    const done = new Set(mine.filter((i) => answered(responses, i.id)).map((i) => i.id));
+    f.paint(mine, { current: current ?? undefined, done, extras: extras.filter((x) => x.doc === docId).map((x) => x.target) });
+  };
+  // A live document that re-rendered is repainted, but not scrolled: the reader may be exploring it.
+  const paintRef = useRef(paint);
+  paintRef.current = paint;
+  const onRefresh = useCallback((docId: string) => {
+    const f = frames.current.get(docId);
+    if (f) paintRef.current(docId, f);
+  }, []);
   useEffect(() => {
-    for (const [docId, f] of frames.current) {
-      if (!f) continue;
-      const mine = items.filter((i) => docOfItem(i).id === docId);
-      const done = new Set(mine.filter((i) => answered(responses, i.id)).map((i) => i.id));
-      f.paint(mine, { current: current ?? undefined, done, extras: extras.filter((x) => x.doc === docId).map((x) => x.target) });
-    }
+    for (const [docId, f] of frames.current) if (f) paint(docId, f);
     if (currentItem) {
       const f = frames.current.get(docOfItem(currentItem).id);
       if (f) {
@@ -135,7 +142,7 @@ function Guide({ request, sink }: { request: Request; sink: HttpSink | null }) {
           </div>
         )}
         {request.documents.map((d) => (
-          <DocView key={d.id} doc={d} hidden={d.id !== shownDoc} onFrame={onFrame} />
+          <DocView key={d.id} doc={d} hidden={d.id !== shownDoc} onFrame={onFrame} onRefresh={onRefresh} />
         ))}
       </section>
       <aside className="panel" aria-label="Guide">
@@ -210,14 +217,33 @@ const opaqueOrigin = () => {
   }
 };
 
-function DocView({ doc, hidden, onFrame }: { doc: Doc; hidden: boolean; onFrame: (id: string, f: DocFrame | null) => void }) {
+function DocView({ doc, hidden, onFrame, onRefresh }: { doc: Doc; hidden: boolean; onFrame: (id: string, f: DocFrame | null) => void; onRefresh: (id: string) => void }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const inline = doc.source.kind === 'inline' ? doc.source : null;
+  // A live document runs its own scripts (url sources only, never a snapshot: see DocumentSource).
+  const live = doc.source.kind === 'url' && doc.source.scripts === true;
   // An inline document can always be shown in our own DOM; a nested frame only when it is reachable.
   const [mode, setMode] = useState<'frame' | 'shadow' | 'detached'>(() => (inline && opaqueOrigin() ? 'shadow' : 'frame'));
+  const watcher = useRef<MutationObserver | null>(null);
+  useEffect(() => () => watcher.current?.disconnect(), []);
+  // Its content changes after load (and as the reader clicks around it): re-find passages once it settles.
+  const watch = (frame: DocFrame) => {
+    watcher.current?.disconnect();
+    let timer: number | undefined;
+    watcher.current = new MutationObserver(() => {
+      clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        frame.refresh();
+        onRefresh(doc.id);
+      }, 250);
+    });
+    watcher.current.observe(frame.surface.body, { childList: true, subtree: true, characterData: true });
+  };
   const onLoad = () => {
     try {
-      onFrame(doc.id, new DocFrame(frameSurface(ref.current!)));
+      const frame = new DocFrame(frameSurface(ref.current!));
+      onFrame(doc.id, frame);
+      if (live) watch(frame);
     } catch {
       // Only an opaque origin gets the shadow root: on a normal origin the document must stay
       // in its script-less frame, away from this page's storage and API. A frame that became
@@ -239,7 +265,7 @@ function DocView({ doc, hidden, onFrame }: { doc: Doc; hidden: boolean; onFrame:
           This document is on another site, so passages can't be highlighted here. Each item shows its passage, with a link to it in the original.
         </p>
       )}
-      <iframe ref={ref} title={doc.title ?? doc.id} src={src} srcDoc={srcDoc} onLoad={onLoad} sandbox="allow-same-origin allow-popups" />
+      <iframe ref={ref} title={doc.title ?? doc.id} src={src} srcDoc={srcDoc} onLoad={onLoad} sandbox={live ? 'allow-same-origin allow-scripts allow-popups' : 'allow-same-origin allow-popups'} />
     </div>
   );
 }

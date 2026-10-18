@@ -22,6 +22,8 @@ A request is JSON: documents, plus items that each point at a passage, ask one t
 - `target.quote`: `{exact, prefix?, suffix?}` copied from the document **as served** (the HTML text, not a Markdown source; curly quotes and dashes are folded for you). Keep `exact` to the words that matter (a clause or sentence); add a prefix/suffix only when the words occur more than once.
 - Both together: the quote is searched inside the section first.
 
+**A page drawn by JavaScript** (a dashboard, a single-page app) is empty until its scripts run, and a document's scripts are off by default. Give it `"source": {"kind": "url", "url": "…", "scripts": true}`, serve the viewer from the page's own origin (or highlights fall back to the passage in the card), and give each view its own document (`…/#/theme/3`) rather than asking the reader to navigate. `check` reads the served HTML, not the rendered page: render it first (headless browser, `document.documentElement.outerHTML`) and pass that with `--doc id=rendered.html`. Only for pages you trust.
+
 ## 3. Check, then deliver
 
 ```bash

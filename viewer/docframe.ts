@@ -155,6 +155,13 @@ export class DocFrame {
     this.index = indexText(surface.body);
   }
 
+  /** Re-read the document after it changed (a live page re-rendered): passages are found afresh. */
+  refresh() {
+    this.index = indexText(this.surface.body);
+    this.anchored.clear();
+    this.outlined = null;
+  }
+
   private byId(id: string): Element | null {
     return this.surface.root.getElementById(id);
   }

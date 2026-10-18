@@ -145,6 +145,9 @@ export function findQuote(index: TextIndex, quote: Quote, { minQuality = 0.75 } 
       const h = scored[0]!.h;
       return { ok: true, match: { start: h, end: h + exact.length, how: 'exact', score: 1 } };
     }
+    // The context cannot choose: the recorded occurrence can, if it still exists.
+    const h = quote.occurrence ? hits[quote.occurrence - 1] : undefined;
+    if (h !== undefined) return { ok: true, match: { start: h, end: h + exact.length, how: 'exact', score: 1 } };
     return { ok: false, reason: 'ambiguous', candidates: hits.length };
   }
   // Approximate: the document changed since the quote was taken.
@@ -227,13 +230,21 @@ export function sectionSpan(index: TextIndex, el: Element): { start: number; end
   return { start, end: Math.max(start, end) };
 }
 
-/** A quote for `[start, end)`, with enough context to be unique (at least `context` chars). */
+/** Which match of `exact` (folded) in the text starts at `start`, from 1; 1 for a unique quote. */
+export function occurrenceOf(text: string, exact: string, start: number): number {
+  let n = 0;
+  for (let i = text.indexOf(exact); i !== -1 && i <= start; i = text.indexOf(exact, i + 1)) n++;
+  return Math.max(1, n);
+}
+
+/** A quote for `[start, end)`, with enough context to be unique (at least `context` chars), and its occurrence. */
 export function describeQuote(index: TextIndex, start: number, end: number, { context = 32 } = {}): Quote {
   const { text } = index;
   const exact = text.slice(start, end);
+  const occurrence = occurrenceOf(text, exact, start);
   let n = context;
   for (;;) {
-    const quote = { exact, prefix: text.slice(Math.max(0, start - n), start), suffix: text.slice(end, end + n) };
+    const quote = { exact, prefix: text.slice(Math.max(0, start - n), start), suffix: text.slice(end, end + n), occurrence };
     const r = findQuote(index, quote);
     if ((r.ok && r.match.start === start) || n > 400) return quote;
     n *= 2;

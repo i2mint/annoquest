@@ -86,12 +86,16 @@ export function mergeResponses<T extends Responses>(a: T, b: Responses | undefin
   }
   const removed = [...new Set([...(a.removed ?? []), ...(b.removed ?? [])])];
   const gone = new Set(removed);
-  const ids = new Set(a.extras.map((x) => x.id));
-  const extras = [...a.extras, ...b.extras.filter((x) => !ids.has(x.id))].filter((x) => !gone.has(x.id));
+  // Per extra, the higher (rev, at) wins: an edited comment beats its earlier text.
+  const extras = new Map(a.extras.map((x) => [x.id, x]));
+  for (const x of b.extras) {
+    const mine = extras.get(x.id);
+    if (!mine || (mine.rev ?? 0) < (x.rev ?? 0) || ((mine.rev ?? 0) === (x.rev ?? 0) && mine.at < x.at)) extras.set(x.id, x);
+  }
   return {
     ...a,
     answers,
-    extras,
+    extras: [...extras.values()].filter((x) => !gone.has(x.id)),
     removed,
     updatedAt: a.updatedAt > b.updatedAt ? a.updatedAt : b.updatedAt,
     finishedAt: a.finishedAt ?? b.finishedAt,

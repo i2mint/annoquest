@@ -28,14 +28,18 @@ export interface ViewerState {
   publishable: boolean;
   /** Fresh passage hashes from the live document, per item. */
   seen: Record<string, string | undefined>;
+  /** The page each document's frame shows now (the reader may have followed links): original address and title. */
+  pages: Record<string, { url: string; title?: string } | undefined>;
   init(p: { request: Request; reader: Partial<Reader> & { key: string }; responses: Responses }): void;
   fail(message: string): void;
   setServerUser(user: string | null): void;
   setView(v: View): void;
   go(id: string | null): void;
   answer(itemId: string, patch: Partial<Pick<Answer, 'value' | 'comment'>>): void;
-  addExtra(x: Omit<Extra, 'id' | 'at'>): void;
+  addExtra(x: Omit<Extra, 'id' | 'at' | 'rev'>): void;
+  editExtra(id: string, comment: string): void;
   removeExtra(id: string): void;
+  setPage(doc: string, page: { url: string; title?: string }): void;
   finish(): void;
   setSink(s: SinkState): void;
   setLocalSaved(ok: boolean): void;
@@ -61,6 +65,7 @@ export const useViewer = create<ViewerState>()(
     preview: false,
     publishable: false,
     seen: {},
+    pages: {},
     init: ({ request, reader, responses }) =>
       set((s) => {
         s.request = request;
@@ -100,9 +105,19 @@ export const useViewer = create<ViewerState>()(
       set((s) => {
         if (!s.responses) return;
         const at = now();
-        s.responses.extras.push({ ...x, id: `x-${Date.now().toString(36)}`, at });
+        s.responses.extras.push({ ...x, id: `x-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, at, rev: 0 });
         s.responses.updatedAt = at;
       }),
+    editExtra: (id, comment) =>
+      set((s) => {
+        const x = s.responses?.extras.find((e) => e.id === id);
+        if (!x || x.comment === comment) return;
+        x.comment = comment;
+        x.at = now();
+        x.rev = (x.rev ?? 0) + 1;
+        s.responses!.updatedAt = x.at;
+      }),
+    setPage: (doc, page) => set((s) => void (s.pages[doc] = page)),
     removeExtra: (id) =>
       set((s) => {
         if (!s.responses) return;

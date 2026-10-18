@@ -5,11 +5,14 @@
 import { createRoot } from 'react-dom/client';
 import { parseRequest } from '../src/request';
 import { Responses } from '../src/spec';
+import { diffResponses } from '../src/events';
 import { App } from './App';
+import { deviceId, deviceReader } from './device';
 import { loadRequest } from './load';
 import type { DataProvider } from '@zodal/store';
 import { defaultStore, loadLocal, makeSink, mergeResponses, saveLocal, type HttpSink, type Stored } from './persist';
 import { useViewer } from './state';
+import { createTracker, type Tracker } from './track';
 import './styles.css';
 
 export interface ViewerOptions {
@@ -20,12 +23,14 @@ export interface ViewerOptions {
 /** Load the request, work out who is reading, restore their answers, wire saving, render into `root`. */
 export async function mountViewer(root: HTMLElement, { store = defaultStore() }: ViewerOptions = {}) {
   let sink: HttpSink | null = null;
+  let tracker: Tracker | null = null;
   try {
     const loaded = await loadRequest();
     let request = loaded.request;
     const { origin, reader: readerParam } = loaded;
     const v = useViewer.getState();
-    sink = makeSink(request, (s) => useViewer.getState().setSink(s));
+    const device = deviceId();
+    sink = makeSink(request, (s) => useViewer.getState().setSink(s), { device });
     if (sink) v.setSink({ kind: 'saving' });
     const user = sink ? (await sink.whoami())?.toLowerCase() ?? null : null;
     v.setServerUser(user);
@@ -44,11 +49,14 @@ export async function mountViewer(root: HTMLElement, { store = defaultStore() }:
       }
     }
     document.title = request.title;
+    // With a sink and nobody signed in, an unnamed reader is this browser (its device id), so two
+    // people opening one link stay apart; without a sink, a lone listed reader is assumed.
     const match =
       request.readers.find((r) => (user && r.email?.toLowerCase() === user) || (readerParam && r.id === readerParam)) ??
-      (request.readers.length === 1 && !readerParam && !user ? request.readers[0] : undefined);
-    const key = match?.id ?? user ?? readerParam ?? 'me';
-    const reader = { ...match, key };
+      (request.readers.length === 1 && !readerParam && !user && !sink ? request.readers[0] : undefined);
+    const key = match?.id ?? user ?? readerParam ?? (sink ? deviceReader(device) : 'me');
+    // A reader named by the link is named: no need to ask for a name.
+    const reader = { ...match, id: match?.id ?? readerParam, key };
     // The requester opening their own request (not as a listed reader) is previewing it:
     // registering it is useful, sending answers as theirs is not.
     // A version the server does not hold is always a preview for its sender, even one listed as a
@@ -67,33 +75,34 @@ export async function mountViewer(root: HTMLElement, { store = defaultStore() }:
       id,
     };
     let responses: Stored = mergeResponses(blank, await loadLocal(store, id));
+    sink?.identify({ reader: key, person: { id: match?.id ?? readerParam, name: match?.name, email: match?.email ?? user ?? undefined } });
     const remote = sink ? await sink.mine() : undefined;
     responses = mergeResponses(responses, remote);
     v.init({ request, reader, responses });
     if (sink) {
-      const canon = (v: unknown): string => JSON.stringify(v, (_k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([p], [q]) => (p < q ? -1 : 1))) : x));
       // Anything kept here but not yet on the server (closed while offline, signed out…) goes now.
-      const same = (a?: { answers: unknown; extras: unknown }, b?: { answers: unknown; extras: unknown }) =>
-        !!a && !!b && canon([a.answers, a.extras]) === canon([b.answers, b.extras]);
-      const has = Object.keys(responses.answers).length || responses.extras.length;
-      if (has && !same(responses, remote)) {
-        const { id: _drop, ...plain } = responses;
-        sink.schedule(plain as Responses);
-      } else v.setSink({ kind: 'sent', at: '' });
+      const missing = diffResponses(remote ?? null, responses);
+      if (missing.length) sink.push(missing);
+      else v.setSink({ kind: 'sent', at: '' });
+      if (request.track) tracker = createTracker((events) => sink!.push(events));
     }
 
-    // Every change: write locally at once, schedule the sink.
+    // Every change: write locally at once, and send what changed as events.
     useViewer.subscribe((s, prev) => {
-      if (!s.responses || s.responses === prev.responses) return;
-      const value = { ...(s.responses as Responses), id } as Stored;
-      void saveLocal(store, value).then((ok) => useViewer.getState().setLocalSaved(ok));
-      const { id: _drop, ...plain } = value;
-      sink?.schedule(plain as Responses);
+      if (s.responses && s.responses !== prev.responses) {
+        const value = { ...(s.responses as Responses), id } as Stored;
+        void saveLocal(store, value).then((ok) => useViewer.getState().setLocalSaved(ok));
+        sink?.push(diffResponses(prev.responses, s.responses));
+      }
+      if (tracker && s.pages !== prev.pages) {
+        const shown = s.pages[request.documents[0]!.id];
+        if (shown) tracker.page(shown.url, shown.title);
+      }
     });
   } catch (e) {
     useViewer.getState().fail((e as Error).message);
   }
-  createRoot(root).render(<App sink={sink} />);
+  createRoot(root).render(<App sink={sink} tracker={tracker} />);
 }
 
 // Following a link to another request from this page only changes the fragment, and the

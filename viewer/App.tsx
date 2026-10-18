@@ -6,7 +6,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { commentRequired, resolveResponseType } from '../src/presets';
 import { replyLink } from '../src/link';
-import type { Doc, Item, Option, Request, ResponseType, Target } from '../src/spec';
+import type { Doc, Extra, Item, Option, Request, ResponseType, Target } from '../src/spec';
+import { originalUrl, pageKey } from '../src/content';
+import type { Tracker } from './track';
 import { DocFrame, frameSurface, shadowSurface, textFragmentUrl, type Anchored } from './docframe';
 import { mountShadowDocument } from './shadowdoc';
 import type { HttpSink } from './persist';
@@ -19,12 +21,12 @@ const TONE_CLASS: Record<Option['tone'], string> = { positive: 'tone-pos', neutr
 
 // ---------------------------------------------------------------------------
 
-export function App({ sink }: { sink: HttpSink | null }) {
+export function App({ sink, tracker = null }: { sink: HttpSink | null; tracker?: Tracker | null }) {
   const request = useViewer((s) => s.request);
   const error = useViewer((s) => s.error);
   if (error) return <Notice title="This request could not be opened" body={error} />;
   if (!request) return <Notice title="Loading…" body="" busy />;
-  return <Guide request={request} sink={sink} />;
+  return <Guide request={request} sink={sink} tracker={tracker} />;
 }
 
 function Notice({ title, body, busy }: { title: string; body: string; busy?: boolean }) {
@@ -38,13 +40,17 @@ function Notice({ title, body, busy }: { title: string; body: string; busy?: boo
 
 // ---------------------------------------------------------------------------
 
-function Guide({ request, sink }: { request: Request; sink: HttpSink | null }) {
+function Guide({ request, sink, tracker }: { request: Request; sink: HttpSink | null; tracker: Tracker | null }) {
   const reader = useViewer((s) => s.reader);
   const responses = useViewer((s) => s.responses);
   const view = useViewer((s) => s.view);
   const current = useViewer((s) => s.current);
+  const pages = useViewer((s) => s.pages);
   const { go, setView, setSeen } = useViewer.getState();
   const items = useMemo(() => queue(request, reader.id), [request, reader.id]);
+  /** No items: a freeform request (the reader highlights and comments on anything). */
+  const freeform = items.length === 0;
+  const [focused, setFocused] = useState<string | null>(null);
   const mode = modeOf(request, reader);
   const frames = useRef(new Map<string, DocFrame | null>());
   const [, bump] = useState(0);
@@ -67,10 +73,14 @@ function Guide({ request, sink }: { request: Request; sink: HttpSink | null }) {
 
   // Paint and reveal whenever the current item, answers, or a frame change.
   const extras = responses?.extras ?? [];
+  // A comment belongs to the page it was made on; the reader may have followed links since.
+  const onPage = (docId: string) => (x: Extra) => x.doc === docId && (!x.url || !pages[docId] || x.url === pages[docId]!.url);
+  const extrasRef = useRef<(docId: string) => Extra[]>(() => []);
+  extrasRef.current = (docId) => extras.filter(onPage(docId));
   const paint = (docId: string, f: DocFrame) => {
     const mine = items.filter((i) => docOfItem(i).id === docId);
     const done = new Set(mine.filter((i) => answered(responses, i.id)).map((i) => i.id));
-    f.paint(mine, { current: current ?? undefined, done, extras: extras.filter((x) => x.doc === docId).map((x) => x.target) });
+    f.paint(mine, { current: current ?? undefined, done, extras: extras.filter(onPage(docId)).map((x) => x.target) });
   };
   // A live document that re-rendered is repainted, but not scrolled: the reader may be exploring it.
   const paintRef = useRef(paint);
@@ -89,7 +99,7 @@ function Guide({ request, sink }: { request: Request; sink: HttpSink | null }) {
         f.reveal(currentItem);
       }
     }
-  }, [current, responses, frames.current.size, bump]);
+  }, [current, responses, frames.current.size, bump, pages]);
 
   const onFrame = useCallback(
     (docId: string, frame: DocFrame | null) => {
@@ -98,8 +108,12 @@ function Guide({ request, sink }: { request: Request; sink: HttpSink | null }) {
       if (!frame) return;
       frame.surface.body.addEventListener('click', (e) => {
         const ev = e as MouseEvent;
-        const hit = frame.itemAt(items.filter((i) => docOfItem(i).id === docId), ev.clientX, ev.clientY, (ev.composedPath()[0] as Node) ?? null);
-        if (hit) go(hit);
+        const node = (ev.composedPath()[0] as Node) ?? null;
+        const hit = frame.itemAt(items.filter((i) => docOfItem(i).id === docId), ev.clientX, ev.clientY, node);
+        if (hit) return go(hit);
+        // A comment's highlight: open that comment in the panel, to read or edit it.
+        const x = frame.targetAt(extrasRef.current(docId), ev.clientX, ev.clientY, node);
+        if (x) setFocused(x);
       });
       frame.doc.addEventListener('selectionchange', () => {
         const s = frame.selection();
@@ -126,11 +140,14 @@ function Guide({ request, sink }: { request: Request; sink: HttpSink | null }) {
   const start = () => go((items.find((i) => !answered(responses, i.id)) ?? items[0]!).id);
 
   useEffect(() => {
-    if (view === 'item' && !current) start();
+    if (view === 'item' && !current && items.length) start();
   }, [view, current]);
 
+  const selectionBox = request.allowExtra && selection && (freeform || view !== 'intro') && (
+    <SelectionBox selection={selection} url={pages[selection.doc]?.url} onDone={() => setSelection(null)} />
+  );
   return (
-    <div className="layout">
+    <div className={`layout${freeform ? ' freeform' : ''}`}>
       <section className="doc-pane" aria-label="Document">
         {request.documents.length > 1 && (
           <div className="doc-tabs" role="tablist">
@@ -142,12 +159,19 @@ function Guide({ request, sink }: { request: Request; sink: HttpSink | null }) {
           </div>
         )}
         {request.documents.map((d) => (
-          <DocView key={d.id} doc={d} hidden={d.id !== shownDoc} onFrame={onFrame} onRefresh={onRefresh} />
+          <DocView key={d.id} doc={d} hidden={d.id !== shownDoc} onFrame={onFrame} onRefresh={onRefresh} tracker={tracker} />
         ))}
       </section>
       <aside className="panel" aria-label="Guide">
         <Header request={request} sink={sink} />
-        <Progress items={items} />
+        {!freeform && <Progress items={items} />}
+        {freeform ? (
+          <div className="panel-body">
+            {selectionBox}
+            <Freeform request={request} />
+            <Comments docs={request.documents} focused={focused} onFocused={setFocused} />
+          </div>
+        ) : (
         <div className="panel-body">
           {view === 'intro' && <Intro request={request} items={items} onStart={start} />}
           {view === 'pause' && currentItem && <Pause next={currentItem} onGo={() => setView('item')} onStop={() => setView('done')} />}
@@ -165,14 +189,16 @@ function Guide({ request, sink }: { request: Request; sink: HttpSink | null }) {
             />
           )}
           {view === 'done' && <Done request={request} items={items} sink={sink} />}
-          {request.allowExtra && selection && view !== 'intro' && <SelectionBox selection={selection} onDone={() => setSelection(null)} />}
+          {selectionBox}
           {view !== 'intro' && <ItemList items={items} request={request} mode={mode} />}
+          {view !== 'intro' && request.allowExtra && <Comments docs={request.documents} focused={focused} onFocused={setFocused} />}
           {view !== 'intro' && view !== 'done' && (
             <button className="link-btn finish" onClick={() => setView('done')}>
               Finish for now
             </button>
           )}
         </div>
+        )}
       </aside>
     </div>
   );
@@ -217,8 +243,16 @@ const opaqueOrigin = () => {
   }
 };
 
-function DocView({ doc, hidden, onFrame, onRefresh }: { doc: Doc; hidden: boolean; onFrame: (id: string, f: DocFrame | null) => void; onRefresh: (id: string) => void }) {
+/** Where a framed document is now, as a page: its original address (not the proxy's), or the document's own for a snapshot. */
+function pageOf(doc: Doc, d: Document): { url: string; title?: string } {
+  const own = doc.href ?? (doc.source.kind === 'url' ? new URL(doc.source.url, location.href).href : `#${doc.id}`);
+  const url = d.URL.startsWith('about:') ? own : pageKey(originalUrl(d.URL));
+  return { url, title: d.title?.trim() || undefined };
+}
+
+function DocView({ doc, hidden, onFrame, onRefresh, tracker }: { doc: Doc; hidden: boolean; onFrame: (id: string, f: DocFrame | null) => void; onRefresh: (id: string) => void; tracker: Tracker | null }) {
   const ref = useRef<HTMLIFrameElement>(null);
+  const report = (d: Document) => useViewer.getState().setPage(doc.id, pageOf(doc, d));
   const inline = doc.source.kind === 'inline' ? doc.source : null;
   // A live document runs its own scripts (url sources only, never a snapshot: see DocumentSource).
   const live = doc.source.kind === 'url' && doc.source.scripts === true;
@@ -234,6 +268,7 @@ function DocView({ doc, hidden, onFrame, onRefresh }: { doc: Doc; hidden: boolea
       clearTimeout(timer);
       timer = window.setTimeout(() => {
         frame.refresh();
+        report(frame.doc); // an app's title follows its route
         onRefresh(doc.id);
       }, 250);
     });
@@ -263,6 +298,12 @@ function DocView({ doc, hidden, onFrame, onRefresh }: { doc: Doc; hidden: boolea
       if (live && attached.current === surface.doc) return;
       attached.current = surface.doc;
       const frame = new DocFrame(surface);
+      report(surface.doc);
+      tracker?.watch(surface.doc);
+      // An app's own routes (#/…) are pages too; the document stays, so say when the route changes.
+      const onRoute = () => report(surface.doc);
+      surface.win.addEventListener('hashchange', onRoute);
+      surface.win.addEventListener('popstate', onRoute);
       onFrame(doc.id, frame);
       if (live) watch(frame);
     } catch {
@@ -286,7 +327,7 @@ function DocView({ doc, hidden, onFrame, onRefresh }: { doc: Doc; hidden: boolea
           This document is on another site, so passages can't be highlighted here. Each item shows its passage, with a link to it in the original.
         </p>
       )}
-      <iframe ref={ref} title={doc.title ?? doc.id} src={src} srcDoc={srcDoc} onLoad={onLoad} sandbox={live ? 'allow-same-origin allow-scripts allow-popups' : 'allow-same-origin allow-popups'} />
+      <iframe ref={ref} title={doc.title ?? doc.id} src={src} srcDoc={srcDoc} onLoad={onLoad} sandbox={live ? 'allow-same-origin allow-scripts allow-popups allow-popups-to-escape-sandbox' : 'allow-same-origin allow-popups allow-popups-to-escape-sandbox'} />
     </div>
   );
 }
@@ -300,6 +341,7 @@ function ShadowDocView({ doc, html, baseUrl, hidden, onFrame }: { doc: Doc; html
     try {
       const { shadow, body } = mountShadowDocument(host.current!, html, { baseUrl });
       onFrame(doc.id, new DocFrame(shadowSurface(shadow, body, scroller.current!, doc.id)));
+      useViewer.getState().setPage(doc.id, { url: doc.href ?? `#${doc.id}` });
     } catch (e) {
       console.warn('[annoquest] could not show the document here:', e);
       onFrame(doc.id, null);
@@ -614,7 +656,7 @@ function toneOf(i: Item, request: Request, r: ViewerState['responses']): Option[
 
 // ---------------------------------------------------------------------------
 
-function SelectionBox({ selection, onDone }: { selection: { doc: string; target: Target; text: string }; onDone: () => void }) {
+function SelectionBox({ selection, url, onDone }: { selection: { doc: string; target: Target; text: string }; url?: string; onDone: () => void }) {
   const [text, setText] = useState('');
   const [open, setOpen] = useState(false);
   const { addExtra } = useViewer.getState();
@@ -640,7 +682,7 @@ function SelectionBox({ selection, onDone }: { selection: { doc: string; target:
           className="primary"
           disabled={!text.trim()}
           onClick={() => {
-            addExtra({ doc: selection.doc, target: selection.target, comment: text.trim() });
+            addExtra({ doc: selection.doc, target: selection.target, comment: text.trim(), ...(url ? { url } : {}) });
             onDone();
           }}
         >
@@ -655,7 +697,7 @@ function SelectionBox({ selection, onDone }: { selection: { doc: string; target:
 function Done({ request, items, sink }: { request: Request; items: Item[]; sink: HttpSink | null }) {
   const responses = useViewer((s) => s.responses);
   const s = useViewer((x) => x.sink);
-  const { finish, removeExtra } = useViewer.getState();
+  const { finish } = useViewer.getState();
   const [copied, setCopied] = useState(false);
   const n = items.filter((i) => answered(responses, i.id)).length;
   const left = items.length - n;
@@ -700,21 +742,103 @@ function Done({ request, items, sink }: { request: Request; items: Item[]; sink:
           </div>
         </>
       )}
-      {!!responses?.extras.length && (
-        <>
-          <h3>Your other comments</h3>
-          <ul className="extras">
-            {responses.extras.map((x) => (
-              <li key={x.id}>
-                “{x.target.quote?.exact.slice(0, 80)}”: {x.comment}{' '}
-                <button className="link-btn" onClick={() => removeExtra(x.id)}>
-                  remove
-                </button>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/** The freeform panel's head: the instructions (which say that reading is recorded), and a name. */
+function Freeform({ request }: { request: Request }) {
+  const responses = useViewer((s) => s.responses);
+  const reader = useViewer((s) => s.reader);
+  const user = useViewer((s) => s.serverUser);
+  const { setName } = useViewer.getState();
+  const needName = !reader.name && !user && !reader.id;
+  return (
+    <div className="intro">
+      {(request.intro ?? 'Select any passage in the page to comment on it.').split(/\n\s*\n/).filter(Boolean).map((p, i) => (
+        <p key={i}>
+          <Linked text={p} />
+        </p>
+      ))}
+      {needName && (
+        <label className="field">
+          Your name (optional, so your comments can be told apart)
+          <input defaultValue={responses?.reader.name ?? ''} onBlur={(e) => setName(e.target.value.trim())} placeholder="Optional" />
+        </label>
+      )}
+      {!responses?.extras.length && <p className="hint">Select some text in the page, then “Comment on this”.</p>}
+    </div>
+  );
+}
+
+/** The reader's own comments: this page's first, each one editable and removable. */
+function Comments({ docs, focused, onFocused }: { docs: Doc[]; focused: string | null; onFocused: (id: string | null) => void }) {
+  const extras = useViewer((s) => s.responses?.extras ?? []);
+  const pages = useViewer((s) => s.pages);
+  if (!extras.length) return null;
+  const here = (x: Extra) => !x.url || x.url === pages[x.doc]?.url;
+  const sorted = [...extras].sort((a, b) => Number(here(b)) - Number(here(a)) || (a.at < b.at ? -1 : 1));
+  const multi = docs.length > 1 || extras.some((x) => !here(x));
+  return (
+    <section className="comments" aria-label="Your comments">
+      <h3>Your comments ({extras.length})</h3>
+      <ul>
+        {sorted.map((x) => (
+          <CommentRow key={x.id} x={x} elsewhere={multi && !here(x)} open={focused === x.id} onOpen={(on) => onFocused(on ? x.id : null)} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function CommentRow({ x, elsewhere, open, onOpen }: { x: Extra; elsewhere: boolean; open: boolean; onOpen: (on: boolean) => void }) {
+  const { editExtra, removeExtra } = useViewer.getState();
+  const [text, setText] = useState(x.comment);
+  const ref = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (open) {
+      setText(x.comment);
+      ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [open]);
+  const quote = x.target.quote?.exact ?? '';
+  return (
+    <li ref={ref} className={`comment${open ? ' open' : ''}`}>
+      <p className="quote">“{quote.slice(0, 140)}{quote.length > 140 ? '…' : ''}”</p>
+      {elsewhere && <p className="hint page">On {x.url?.replace(/^https?:\/\//, '')}</p>}
+      {open ? (
+        <>
+          <label className="field">
+            Your comment
+            <textarea autoFocus rows={3} value={text} onChange={(e) => setText(e.target.value)} />
+          </label>
+          <div className="row">
+            <button
+              className="primary"
+              disabled={!text.trim()}
+              onClick={() => {
+                editExtra(x.id, text.trim());
+                onOpen(false);
+              }}
+            >
+              Save
+            </button>
+            <button onClick={() => onOpen(false)}>Cancel</button>
+            <button className="link-btn danger" onClick={() => removeExtra(x.id)}>
+              Delete
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className="text">
+          {x.comment}{' '}
+          <button className="link-btn" onClick={() => onOpen(true)}>
+            edit
+          </button>
+        </p>
+      )}
+    </li>
   );
 }

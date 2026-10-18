@@ -2,6 +2,8 @@
 
 Guided annotation requests, agent-first. Give a reader one or more documents and a prioritised list of things to read, check and answer; they get one link, are walked through the most important items first, and every answer is saved as they give it (and, with a server, sent automatically). You, or your agent, collect the answers and see what is aligned, what needs discussing, what is blocked and what is still waiting.
 
+Or skip the items: a **freeform** link opens any web page for the reader to highlight passages and comment on them, follow its links, and come back to edit; every comment and every page they open is sent as it happens, and `annoquest export` gives you each reader's comments and how long they spent on each page.
+
 ```bash
 npm i -g annoquest            # or: npx annoquest …
 annoquest bake request.json --inline --out review.html     # one self-contained page: send it, host it anywhere
@@ -29,6 +31,26 @@ A request is plain JSON (the Zod schema in [`src/spec.ts`](src/spec.ts) is the s
 
 The document on the left with every asked-about passage highlighted, a guide on the right. One main button (**Next**), the current priority tier open and the later ones folded with their counts, the passage itself shown in the card, a reason asked for whenever an answer blocks, and a neutral "not my area" in every opinion preset. They can select any other passage and comment on it. The save state is always visible: *saved on this device*, *sent*, *will send when back online*, *sign in again*.
 
+## Freeform links (any page, highlights and comments, reading time)
+
+With the server adapter running, its owner makes a link for any page:
+
+```bash
+python -m annoquest_server link https://example.org/essay.html --viewer https://your.site/annoquest/ [--reader ann]
+# → https://your.site/annoquest/?content=https%3A%2F%2Fexample.org%2Fessay.html&t=…&reader=ann
+```
+
+The reader sees the page with a side panel: the instructions (there is nothing to save or submit; reading is recorded), their comments, editable. They select text and comment; they can follow the page's links (on the same site) and comment there too. Without `reader=` (alias `user_id=`), each browser gets a random id of its own.
+
+Every change is an **event** (a comment added, edited or removed, an answer, a page view, a heartbeat while the page is visible), sent in small batches as it happens and kept in an outbox until the server has it. The final state is a pure fold of the events, so the server's log alone rebuilds it, edits included:
+
+```bash
+python -m annoquest_server events <request id> > events.json     # on the server
+annoquest export events.json --format markdown                   # per reader: comments (page, passage, occurrence, comment), answers, time per page
+```
+
+A page on the viewer's own site is framed live, scripts and all. Any other site goes through the server's proxy, which serves it without scripts and only for sites the server's owner made a link for (the token in the link is an HMAC of the site). See [docs/design.md](docs/design.md#v02-freeform-annotation-the-event-log-and-content-links).
+
 ## Response types
 
 Built-in presets (`annoquest presets`), each option tagged with a tone (positive, neutral, attention, blocking) so collection works the same for all of them:
@@ -54,10 +76,10 @@ Override the wording per item with `labels` (item-specific wording gets better a
 | Seam | Default (no server) | Also built in |
 |---|---|---|
 | Document source | `inline`: `bake --inline` snapshots the HTML into the page | `url`: a live page; same-origin gets highlights, cross-origin shows the passage with a `#:~:text=` link. Its scripts stay off unless `"scripts": true` (for a page drawn by JavaScript, that you trust); passages are then re-found whenever it re-renders |
-| Delivery | a baked HTML file | `annoquest link`: the request in the link fragment (`#r=`), or `?spec=<url>` to a hosted JSON |
+| Delivery | a baked HTML file | `annoquest link`: the request in the link fragment (`#r=`), `?spec=<url>` to a hosted JSON, or `?content=<url>&t=<token>` for freeform on any page |
 | Device storage | localStorage, through a zodal `DataProvider` | any `DataProvider` |
-| Sink | `local`: answers stay on the device; the reader sends a reply link or a file | `http`: autosubmit to an annoquest server (`"sink": {"kind": "http", "url": "/api"}`) |
-| Identity | self-declared (`?reader=` in the link, or a name) | server-asserted, from a forward-auth header |
+| Sink | `local`: answers stay on the device; the reader sends a reply link or a file | `http`: every change sent as an event to an annoquest server (`"sink": {"kind": "http", "url": "/api"}`) |
+| Identity | self-declared (`?reader=` or `?user_id=` in the link, else a random id kept in the browser, plus a name) | server-asserted, from a forward-auth header |
 
 See [docs/design.md](docs/design.md) for why, and [docs/research/](docs/research/) for the prior art and the browser techniques behind it.
 
@@ -69,6 +91,9 @@ annoquest check <request.json> [--doc id=path|url]... [--write]
 annoquest bake <request.json> [--out page.html] [--doc id=path|url]... [--inline]
 annoquest link <request.json> --viewer <url> [--reader id] [--spec-url url]
 annoquest collect <file|dir|reply-link>... --request <request.json> [--format json|markdown]
+annoquest export <events file|dir>... [--request <request.json>] [--format json|markdown]
+                                                              each reader's final state + reading analytics
+annoquest viewer [--api <url>] [--out page.html]              the built viewer, pointed at a server's API
 annoquest revise <request.json> --viewer <url> [--against <published.json>] [--api <url>]
                                                               a new revision under the same id (and link)
 annoquest diff <before.json> <after.json>                     items added, removed, changed
@@ -81,7 +106,7 @@ Output is JSON on stdout; errors are `{"error": {"code", "message"}}` on stderr 
 ## Library
 
 ```ts
-import { createRequest, checkRequest, bakeRequest, requestLink, summarize, summaryMarkdown } from 'annoquest';
+import { createRequest, checkRequest, bakeRequest, requestLink, summarize, summaryMarkdown, foldBatches, exportLog } from 'annoquest';
 ```
 
 Every function is plain data in, plain data out; the CLI is a thin wrapper.

@@ -5,10 +5,12 @@ Layout under the data directory::
     requests/<request id>.json                      {"request", "by", "at"}       written once (revision 1)
     revisions/<request id>/<NNNNNN>.json              {"request", "by", "at", "revision"}  revisions 2.., each once
     responses/<request id>/<reader key>/<stamp>.json {"responses", "by", "at"}     one file per save
+    events/<request id>/<device key>/<stamp>.json    an event batch + "by", "receivedAt"  one file per post
 
 Nothing is ever rewritten, so a backup that keeps one copy per file keeps the whole
 history, and the latest state of a reader is the newest file in their folder. Reader
-keys are a hash of the identity, so no email address appears in a path.
+keys are a hash of the identity, so no email address appears in a path; device keys are a
+hash of the device id the viewer sends, so its folder name does not give the id away.
 """
 
 from __future__ import annotations
@@ -71,13 +73,41 @@ def merge_responses(saves: list[dict]) -> dict | None:
             if cur is None or (a.get("rev", 0), a.get("at", "")) >= (cur.get("rev", 0), cur.get("at", "")):
                 out["answers"][k] = a
         for x in r.get("extras") or []:
-            extras.setdefault(x["id"], x)
+            cur = extras.get(x["id"])
+            if cur is None or (x.get("rev", 0), x.get("at", "")) >= (cur.get("rev", 0), cur.get("at", "")):
+                extras[x["id"]] = x
         removed.update(r.get("removed") or [])
         if r.get("finishedAt") and not out.get("finishedAt"):
             out["finishedAt"] = r["finishedAt"]
     out["extras"] = [x for i, x in extras.items() if i not in removed]
     out["removed"] = sorted(removed)
     return out
+
+
+EVENT_TYPES = {"open", "view", "visibility", "beat", "answer", "extra", "remove", "name", "finish"}
+
+
+def well_formed_batch(batch: object, *, max_events: int = 500) -> bool:
+    """Whether an event batch has the shape the fold relies on (``EventBatch`` in ``src/spec.ts``)."""
+    if not isinstance(batch, dict):
+        return False
+    events = batch.get("events")
+    return (
+        all(isinstance(batch.get(k), str) and batch.get(k) for k in ("request", "reader", "device"))
+        and len(batch["reader"]) <= 254
+        and len(batch["device"]) <= 64
+        and isinstance(events, list)
+        and 0 < len(events) <= max_events
+        and all(
+            isinstance(e, dict)
+            and e.get("type") in EVENT_TYPES
+            and isinstance(e.get("id"), str)
+            and isinstance(e.get("session"), str)
+            and isinstance(e.get("seq"), int)
+            and isinstance(e.get("at"), str)
+            for e in events
+        )
+    )
 
 
 def _write_once(path: Path, data: dict) -> bool:
@@ -183,6 +213,35 @@ class Store:
     def latest(self, request_id: str, identity: str) -> dict | None:
         """A reader's current answers: all their saves, folded."""
         return self._fold(self._reader_dir(request_id, identity))
+
+    # ---- events ----
+    def _device_dir(self, request_id: str, device: str) -> Path:
+        return self.root / "events" / request_id / reader_key(f"device:{device}", self.salt)
+
+    def event_files(self, request_id: str, device: str) -> int:
+        d = self._device_dir(request_id, device)
+        return sum(1 for _ in d.glob("*.json")) if d.is_dir() else 0
+
+    def add_events(self, request_id: str, batch: dict, *, by: str | None) -> str:
+        """Append one batch (as sent, plus who the server says sent it); returns its file name."""
+        name = f"{_stamp()}.json"
+        _write_once(self._device_dir(request_id, batch["device"]) / name, {**batch, **({"by": by} if by else {}), "receivedAt": _now()})
+        return name
+
+    def _batches(self, d: Path) -> Iterator[dict]:
+        for f in sorted(d.glob("*.json")) if d.is_dir() else []:
+            try:
+                yield json.loads(f.read_text(encoding="utf-8"))
+            except ValueError:
+                continue  # a damaged file must not hide the others
+
+    def events(self, request_id: str, *, device: str | None = None, by: str | None = None) -> list[dict]:
+        """Stored batches: one device's, or one signed-in user's (all devices), or everything."""
+        if device is not None:
+            return list(self._batches(self._device_dir(request_id, device)))
+        base = self.root / "events" / request_id
+        out = [b for d in (sorted(base.iterdir()) if base.is_dir() else []) for b in self._batches(d)]
+        return [b for b in out if b.get("by") == by] if by is not None else out
 
     def latest_all(self, request_id: str) -> Iterator[dict]:
         base = self.root / "responses" / request_id

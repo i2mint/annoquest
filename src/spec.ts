@@ -70,6 +70,8 @@ export const Quote = z.object({
   exact: z.string().min(1),
   prefix: z.string().optional(),
   suffix: z.string().optional(),
+  /** Which match of `exact` in the page this is, from 1: recorded always, used only to break a tie the context cannot. */
+  occurrence: z.number().int().positive().optional(),
 });
 export type Quote = z.infer<typeof Quote>;
 
@@ -149,13 +151,18 @@ export const Request = z.object({
   due: z.string().optional(),
   documents: z.array(Doc).min(1),
   responseTypes: z.record(z.string(), ResponseType).default({}),
-  items: z.array(Item).min(1),
+  /** What to walk the reader through; none makes a freeform request (with `allowExtra`). */
+  items: z.array(Item).default([]),
   sink: Sink.default({ kind: 'local' }),
-  /** Let the reader annotate passages that no item points at. */
+  /** Let the reader annotate passages that no item points at (freeform annotation). */
   allowExtra: z.boolean().default(true),
+  /** Record which pages the reader opens and for how long (see `events.ts`); say so in `intro`. */
+  track: z.boolean().default(false),
   createdAt: z.string().optional(),
   /** Set by a server: which revision of this request (same id) this is, from 1. */
   revision: z.number().int().positive().optional(),
+  /** Set on a request made from a content link: the page, and the server's token for its site. */
+  content: z.object({ url: z.string().min(1), token: z.string().min(1) }).optional(),
 });
 export type Request = z.infer<typeof Request>;
 export type RequestInput = z.input<typeof Request>;
@@ -180,9 +187,13 @@ export type Answer = z.infer<typeof Answer>;
 export const Extra = z.object({
   id: z.string().min(1),
   doc: z.string(),
+  /** The page it was made on, when the reader followed a link away from the document's own address. */
+  url: z.string().optional(),
   target: Target,
   comment: z.string(),
   at: z.string(),
+  /** Increases with every edit; the highest wins in a merge (absent reads as 0). */
+  rev: z.number().int().nonnegative().optional(),
 });
 export type Extra = z.infer<typeof Extra>;
 
@@ -201,3 +212,52 @@ export const Responses = z.object({
   by: z.string().optional(),
 });
 export type Responses = z.infer<typeof Responses>;
+
+// ---- events ---------------------------------------------------------------
+
+/**
+ * What the viewer sends as things happen (see `events.ts`): small, append-only, each with a
+ * random `id` so a resend is harmless. `answer` and `extra` carry the whole record at that
+ * revision, so the final state is a fold of the events alone.
+ */
+const EventBase = {
+  id: z.string().min(1),
+  /** One per page load. */
+  session: z.string().min(1),
+  /** Order within a session. */
+  seq: z.number().int().nonnegative(),
+  at: z.string(),
+};
+
+export const Event = z.discriminatedUnion('type', [
+  z.object({ ...EventBase, type: z.literal('open'), viewport: z.object({ w: z.number(), h: z.number() }).optional() }),
+  /** A page shown in the frame: the first load, a followed link, an in-app route. */
+  z.object({ ...EventBase, type: z.literal('view'), url: z.string(), title: z.string().optional() }),
+  z.object({ ...EventBase, type: z.literal('visibility'), state: z.enum(['visible', 'hidden']) }),
+  /** Every few seconds while visible: `active` if the reader interacted since the last one; `depth` the furthest scroll (0–1). */
+  z.object({ ...EventBase, type: z.literal('beat'), url: z.string().optional(), active: z.boolean(), depth: z.number().min(0).max(1).optional() }),
+  z.object({ ...EventBase, type: z.literal('answer'), item: z.string().min(1), answer: Answer }),
+  z.object({ ...EventBase, type: z.literal('extra'), extra: Extra }),
+  z.object({ ...EventBase, type: z.literal('remove'), extra: z.string().min(1) }),
+  z.object({ ...EventBase, type: z.literal('name'), name: z.string() }),
+  z.object({ ...EventBase, type: z.literal('finish') }),
+]);
+export type Event = z.infer<typeof Event>;
+/** An event before it is stamped with its id, session, seq and time. */
+export type EventInput = Event extends infer E ? (E extends Event ? Omit<E, 'id' | 'session' | 'seq' | 'at'> & { at?: string } : never) : never;
+
+/** One post from one device: the unit the server stores (write-once). */
+export const EventBatch = z.object({
+  schema: z.literal('annoquest/events').default('annoquest/events'),
+  request: z.string(),
+  /** The reader key: `?reader=` / `?user_id=` from the link, a listed reader, or the device id. */
+  reader: z.string().min(1),
+  /** A random id kept in this browser. */
+  device: z.string().min(1),
+  /** The reader's own details, as on `Responses`. */
+  person: Person.optional(),
+  events: z.array(Event),
+  /** Set by a server from its identity header; never trusted from a client. */
+  by: z.string().nullish(),
+});
+export type EventBatch = z.infer<typeof EventBatch>;

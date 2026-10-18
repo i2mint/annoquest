@@ -3,14 +3,19 @@
  *
  * Client storage is a zodal `DataProvider` (seam 3; localStorage by default).
  * The sink (seam 4) is `local` (nothing leaves the device until the reader
- * sends a reply link) or `http` (debounced autosubmit of the whole responses
- * document, flushed with `keepalive` on `pagehide` / hidden, retried with
- * backoff, and paused on 401 until the reader signs in again).
+ * sends a reply link) or `http`: every change and page view is an event
+ * (src/events.ts), stamped and put in an outbox kept in this browser, then
+ * posted in small batches (debounced, sent with `keepalive` on `pagehide` /
+ * hidden, retried with backoff, paused on 401 until the reader signs in
+ * again). An event leaves the outbox only once the server has stored it, and a
+ * resend is harmless (events have ids), so nothing is lost by closing the tab.
  */
 import type { DataProvider } from '@zodal/store';
 import { createLocalStorageProvider } from '@zodal/store-localstorage';
 import { mergeResponses } from '../src/collect';
-import type { Request, Responses } from '../src/spec';
+import { foldBatches, parseBatches } from '../src/events';
+import { newId } from '../src/request';
+import type { Event, EventBatch, EventInput, Person, Request, Responses } from '../src/spec';
 
 export { mergeResponses };
 
@@ -55,48 +60,99 @@ export interface HttpSink {
   register(request: Request): Promise<{ status: number }>;
   /** The latest revision the server holds. */
   latest(): Promise<Request | undefined>;
+  /** This reader's state as the server holds it: their events (this device's, without a gateway) folded. */
   mine(): Promise<Responses | undefined>;
-  schedule(value: Responses): void;
+  /** Who is sending: set once the reader is known, before the first push. */
+  identify(who: { reader: string; person?: Person }): void;
+  /** Queue events; they are sent shortly. `quiet` ones (page views, beats) do not change the save state. */
+  push(events: EventInput[], opts?: { quiet?: boolean }): void;
   flush(opts?: { keepalive?: boolean }): Promise<void>;
   dispose(): void;
 }
 
 const JSON_HEADERS = { Accept: 'application/json', 'Content-Type': 'application/json' };
+/** Events per post: keeps each post far below the server's cap and the 64 KB keepalive limit. */
+const BATCH = 100;
+const QUIET = new Set(['open', 'view', 'visibility', 'beat']);
 
 /** The sink a request asks for (seam 4): null for `local`. Add a sink kind here, nowhere else. */
-export function makeSink(request: Request, onState: (s: SinkState) => void): HttpSink | null {
+export function makeSink(request: Request, onState: (s: SinkState) => void, opts: SinkOptions): HttpSink | null {
   switch (request.sink.kind) {
     case 'http':
-      return createHttpSink(request.sink.url, request.id, onState);
+      return createHttpSink(request.sink.url, request.id, onState, opts);
     default:
       return null;
   }
+}
+
+export interface SinkOptions {
+  device: string;
+  delay?: number;
+  maxBackoff?: number;
+  /** Where unsent events are kept between page loads (default: localStorage). */
+  outboxStorage?: () => Storage;
 }
 
 export function createHttpSink(
   base: string,
   requestId: string,
   onState: (s: SinkState) => void,
-  { delay = 2000, maxBackoff = 60000 } = {},
+  { device, delay = 1500, maxBackoff = 60000, outboxStorage = () => localStorage }: SinkOptions,
 ): HttpSink {
   const api = base.replace(/\/$/, '');
   const at = (p: string) => `${api}${p}`;
-  let pending: Responses | null = null;
+  const session = newId(9);
+  let seq = 0;
+  let who: { reader: string; person?: Person } = { reader: device };
   let timer: ReturnType<typeof setTimeout> | undefined;
   let backoff = 0;
   let inFlight: Promise<void> | null = null;
   let authBlocked = false;
 
+  // The outbox: every event not yet stored by the server, kept across reloads.
+  const boxKey = `annoquest:outbox:${requestId}:${device}`;
+  type Boxed = { reader: string; person?: Person; event: Event };
+  let outbox: Boxed[] = (() => {
+    try {
+      return JSON.parse(outboxStorage().getItem(boxKey) ?? '[]') as Boxed[];
+    } catch {
+      return [];
+    }
+  })();
+  const keep = () => {
+    try {
+      if (outbox.length) outboxStorage().setItem(boxKey, JSON.stringify(outbox));
+      else outboxStorage().removeItem(boxKey);
+    } catch {
+      /* storage refused: the outbox lasts for this page load */
+    }
+  };
+  const loud = () => outbox.some((b) => !QUIET.has(b.event.type));
+
   const retry = (state: SinkState) => {
     backoff = Math.min(maxBackoff, backoff ? backoff * 2 : 5000);
-    onState(state.kind === 'offline' ? { kind: 'offline', retryIn: backoff } : state);
+    if (loud()) onState(state.kind === 'offline' ? { kind: 'offline', retryIn: backoff } : state);
     clearTimeout(timer);
     timer = setTimeout(() => void flush(), backoff);
   };
 
-  const post = (value: Responses, keepalive: boolean) => {
-    const body = JSON.stringify(value);
-    return fetch(at(`/requests/${encodeURIComponent(requestId)}/responses`), {
+  /** The next post: the oldest events of one reader (a link opened under two names keeps them apart). */
+  const nextBatch = (): { batch: EventBatch; ids: Set<string> } | null => {
+    if (!outbox.length) return null;
+    const first = outbox[0]!;
+    const take = outbox.filter((b) => b.reader === first.reader).slice(0, BATCH);
+    return {
+      batch: { schema: 'annoquest/events', request: requestId, reader: first.reader, device, person: first.person, events: take.map((b) => b.event) },
+      ids: new Set(take.map((b) => b.event.id)),
+    };
+  };
+  const stored = (ids: Set<string>) => {
+    outbox = outbox.filter((b) => !ids.has(b.event.id));
+    keep();
+  };
+  const post = (batch: EventBatch, keepalive: boolean) => {
+    const body = JSON.stringify(batch);
+    return fetch(at(`/requests/${encodeURIComponent(requestId)}/events`), {
       method: 'POST',
       headers: JSON_HEADERS,
       body,
@@ -107,35 +163,34 @@ export function createHttpSink(
   };
 
   const send = async (keepalive = false) => {
-    if (!pending) return;
-    const value = pending;
-    pending = null;
-    onState({ kind: 'saving' });
+    const next = nextBatch();
+    if (!next) return;
+    const wasLoud = next.batch.events.some((e) => !QUIET.has(e.type));
+    if (wasLoud) onState({ kind: 'saving' });
     try {
-      const res = await post(value, keepalive);
+      const res = await post(next.batch, keepalive);
       const json = res.headers.get('content-type')?.includes('json') ? await res.json().catch(() => null) : null;
       if (res.status === 401 || (res.ok && !json?.saved)) {
         // 401, or a gateway's login page answering 200: the session is gone.
-        pending ??= value;
         authBlocked = true;
         onState({ kind: 'auth' });
         return;
       }
-      if (res.status === 404) {
-        pending ??= value; // the request is not registered yet: keep trying, slowly
-        return retry({ kind: 'waiting' });
-      }
+      if (res.status === 404) return retry({ kind: 'waiting' }); // not registered yet: keep trying, slowly
       if (res.status >= 400 && res.status < 500) {
-        pending ??= value;
         onState({ kind: 'error', message: `Your answers are saved here, but the server refused them (${json?.detail ?? res.status}).` });
         return;
       }
       if (!res.ok) throw new Error(`The server answered ${res.status}.`);
+      stored(next.ids);
       backoff = 0;
       authBlocked = false;
-      onState(pending ? { kind: 'pending' } : { kind: 'sent', at: new Date().toISOString() });
+      if (outbox.length) {
+        if (loud()) onState({ kind: 'pending' });
+        return send(keepalive);
+      }
+      if (wasLoud) onState({ kind: 'sent', at: new Date().toISOString() });
     } catch (e) {
-      pending ??= value; // keep it for the retry unless newer input replaced it
       retry({ kind: 'offline', retryIn: 0 });
       if (!(e instanceof TypeError)) console.warn('[annoquest] submit failed:', e);
     }
@@ -143,6 +198,7 @@ export function createHttpSink(
 
   const flush = ({ keepalive = false } = {}): Promise<void> => {
     clearTimeout(timer);
+    timer = undefined;
     const next = (inFlight ?? Promise.resolve()).then(() => send(keepalive));
     inFlight = next.finally(() => {
       if (inFlight === next) inFlight = null;
@@ -150,21 +206,21 @@ export function createHttpSink(
     return next;
   };
 
-  /** Last chance (page hidden or closing): send now, without queueing behind a send in flight. */
+  /** Last chance (page hidden or closing): post what is waiting now, with keepalive. Kept until stored. */
   const lastChance = () => {
     clearTimeout(timer);
-    if (!pending || authBlocked) return;
-    const value = pending;
-    pending = null;
-    void post(value, true)
+    timer = undefined;
+    const next = nextBatch();
+    if (!next || authBlocked) return;
+    void post(next.batch, true)
       .then(async (res) => {
         const json = res.headers.get('content-type')?.includes('json') ? await res.json().catch(() => null) : null;
         if (!res.ok || !json?.saved) throw new Error(String(res.status));
-        if (!pending) onState({ kind: 'sent', at: new Date().toISOString() });
+        stored(next.ids);
+        if (!outbox.length && next.batch.events.some((e) => !QUIET.has(e.type))) onState({ kind: 'sent', at: new Date().toISOString() });
       })
       .catch(() => {
-        // Not saved after all: keep it, and let the normal path retry (it sorts out why).
-        pending ??= value;
+        // Not stored after all: still in the outbox; the normal path retries (and sorts out why).
         clearTimeout(timer);
         timer = setTimeout(() => void flush(), 5000);
       });
@@ -178,6 +234,15 @@ export function createHttpSink(
   addEventListener('pagehide', onPageHide);
   document.addEventListener('visibilitychange', onHide);
   addEventListener('online', onOnline);
+
+  const getJson = async (path: string) => {
+    try {
+      const res = await fetch(at(path), { headers: { Accept: 'application/json' }, credentials: 'same-origin' });
+      return res.ok ? await res.json() : undefined;
+    } catch {
+      return undefined;
+    }
+  };
 
   return {
     async whoami() {
@@ -203,30 +268,41 @@ export function createHttpSink(
       return { status: res?.status ?? 0 };
     },
     async latest() {
-      try {
-        const res = await fetch(at(`/requests/${encodeURIComponent(requestId)}`), { headers: { Accept: 'application/json' }, credentials: 'same-origin' });
-        return res.ok ? ((await res.json()) as Request) : undefined;
-      } catch {
-        return undefined;
-      }
+      return (await getJson(`/requests/${encodeURIComponent(requestId)}`)) as Request | undefined;
     },
     async mine() {
-      try {
-        const res = await fetch(at(`/requests/${encodeURIComponent(requestId)}/responses/mine`), {
-          headers: { Accept: 'application/json' },
-          credentials: 'same-origin',
-        });
-        return res.ok ? ((await res.json()) as Responses) : undefined;
-      } catch {
-        return undefined;
-      }
+      const rid = encodeURIComponent(requestId);
+      // Whole-document saves (before the event log) exist only behind a sign-in: ask for them only there.
+      const [logged, legacy] = await Promise.all([
+        getJson(`/requests/${rid}/events/mine?device=${encodeURIComponent(device)}`),
+        who.person?.email ? getJson(`/requests/${rid}/responses/mine`) : undefined,
+      ]);
+      const { batches } = parseBatches((logged?.batches as unknown[]) ?? []);
+      // Every batch here is this reader's (this device's, or this signed-in user's): fold them as one.
+      const one = batches.map((b) => ({ ...b, reader: who.reader, by: undefined }));
+      const folded = one.length ? foldBatches(requestId, one)[0]?.responses : undefined;
+      // Answers saved as whole documents (before the event log) still count.
+      const old = legacy && typeof legacy === 'object' && 'answers' in legacy ? (legacy as Responses) : undefined;
+      if (folded && old) return mergeResponses(folded, old);
+      return folded ?? old;
     },
-    schedule(value) {
-      pending = value;
+    identify(w) {
+      who = w;
+    },
+    push(events, { quiet } = {}) {
+      if (!events.length) return;
+      const now = new Date().toISOString();
+      for (const e of events) outbox.push({ reader: who.reader, person: who.person, event: { ...e, id: newId(9), session, seq: seq++, at: e.at ?? now } as Event });
+      keep();
       if (authBlocked) return;
-      onState({ kind: 'pending' });
-      clearTimeout(timer);
-      timer = setTimeout(() => void flush(), delay);
+      const isQuiet = quiet ?? events.every((e) => QUIET.has(e.type));
+      if (!isQuiet) onState({ kind: 'pending' });
+      // A change goes soon; page views and beats ride along, or go within a few seconds of each other.
+      const wait = isQuiet ? Math.max(delay, 5000) : delay;
+      if (timer === undefined || !isQuiet) {
+        clearTimeout(timer);
+        timer = setTimeout(() => void flush(), wait);
+      }
     },
     flush,
     dispose() {
@@ -237,4 +313,3 @@ export function createHttpSink(
     },
   };
 }
-

@@ -270,6 +270,16 @@ export class DocFrame {
     return touching[0]?.id;
   }
 
+  /** Which of some targets (a reader's comments) has its passage under a click, if any: the smallest one. */
+  targetAt(targets: Array<{ id: string; target: Target }>, x: number, y: number, node?: Node | null): string | undefined {
+    const caret = this.surface.caretAt(x, y);
+    const hits = targets
+      .map((t) => ({ id: t.id, r: this.resolve(t.target).range }))
+      .filter(({ r }) => r && (caret && this.surface.body.contains(caret.node) ? r.isPointInRange(caret.node, caret.offset) : !!node && r.intersectsNode(node)));
+    hits.sort((p, q) => p.r!.toString().length - q.r!.toString().length);
+    return hits[0]?.id;
+  }
+
   /** The reader's current selection as a target (quote + nearest section id), or null. */
   selection(): { target: Target; text: string } | null {
     const range = this.surface.selectedRange();

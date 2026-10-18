@@ -13,7 +13,8 @@ import { bakeRequest, createRequest } from '../src/index';
 const VIEWER = join(__dirname, '..', 'dist', 'viewer.html');
 
 // Nothing to read until its script runs; window.rerender() redraws it from scratch, as an SPA does on navigation.
-const APP = `<!doctype html><html><body><main id="app"></main><script>
+// Its slow image holds back the load event, as fonts and pictures do on a real page.
+const APP = `<!doctype html><html><body><img src="slow.png" width="1" height="1"><main id="app"></main><script>
 window.rerender = (extra) => {
   document.getElementById('app').innerHTML = '<section id="goals"><h2>Goals</h2><p>' + (extra || '') +
     'We will ship the pilot to three sites in two weeks.</p></section>';
@@ -44,6 +45,10 @@ beforeAll(async () => {
     '/app.html': APP,
   };
   server = createServer((req, res) => {
+    if (req.url?.startsWith('/slow.png')) {
+      setTimeout(() => res.end(), 4000);
+      return;
+    }
     const body = pages[(req.url ?? '').split('?')[0]!];
     res.statusCode = body ? 200 : 404;
     res.setHeader('content-type', 'text/html');
@@ -78,6 +83,14 @@ async function start(page: Page, path: string) {
 }
 
 describe.skipIf(!haveViewer)('a live document', () => {
+  it('highlights before the page has finished loading', async () => {
+    const page = await browser.newPage();
+    await start(page, '/on.html');
+    expect(await page.evaluate(() => document.querySelector('iframe')!.contentDocument!.readyState)).toBe('interactive');
+    expect(await current(page)).toEqual({ text: 'ship the pilot to three sites', connected: true });
+    await page.close();
+  }, 60000);
+
   it('runs its scripts, finds its passages, and finds them again after it re-renders', async () => {
     const page = await browser.newPage();
     const errors: string[] = [];

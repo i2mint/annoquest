@@ -49,6 +49,8 @@ python -m annoquest_server events <request id> > events.json     # on the server
 annoquest export events.json --format markdown                   # per reader: comments (page, passage, occurrence, comment), answers, time per page
 ```
 
+Or from a phone: the owner page (`annoquest_server.mk_owner_app`, mounted behind your sign-in) lists the requests, each reader's comments and reading time, downloads the export and makes links.
+
 A page on the viewer's own site is framed live, scripts and all. Any other site goes through the server's proxy, which serves it without scripts and only for sites the server's owner made a link for (the token in the link is an HMAC of the site). See [docs/design.md](docs/design.md#v02-freeform-annotation-the-event-log-and-content-links).
 
 ## Response types

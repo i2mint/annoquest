@@ -65,7 +65,7 @@ No items to write: one link opens a page (and the pages it links to on the same 
 
 ```bash
 ssh <server> python -m annoquest_server link <page url> --viewer <server viewer url> [--reader <id>]   # prints the link
-ssh <server> python -m annoquest_server events <request id> > events.json     # later: everything sent
+ssh <server> python -m annoquest_server events <request id> > events.json     # later: everything sent (the owner page, if the server has one, shows the same)
 annoquest export events.json --format markdown                                # each reader's comments (page, passage, occurrence, comment) and time per page
 ```
 

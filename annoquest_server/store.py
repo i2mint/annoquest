@@ -243,6 +243,34 @@ class Store:
         out = [b for d in (sorted(base.iterdir()) if base.is_dir() else []) for b in self._batches(d)]
         return [b for b in out if b.get("by") == by] if by is not None else out
 
+    def request_ids(self) -> list[str]:
+        """Every registered request's id."""
+        d = self.root / "requests"
+        return sorted(f.stem for f in d.glob("*.json") if valid_id(f.stem)) if d.is_dir() else []
+
+    def summary(self, request_id: str) -> dict | None:
+        """What a list of requests shows: the latest revision's title and kind, and who sent how much, when."""
+        revs = self.revisions(request_id)
+        if not revs:
+            return None
+        req = revs[-1]["request"]
+        batches = self.events(request_id)
+        readers = {(b.get("by") or "").lower() or b.get("reader") for b in batches}
+        received = [b["receivedAt"] for b in batches if b.get("receivedAt")]
+        return {
+            "id": request_id,
+            "title": req.get("title"),
+            "kind": "content" if req.get("content") else "guided",
+            "content": (req.get("content") or {}).get("url"),
+            "items": len(req.get("items") or []),
+            "revisions": len(revs),
+            "registeredAt": revs[0].get("at"),
+            "readers": len(readers - {None}),
+            "devices": len({b.get("device") for b in batches}),
+            "events": sum(len(b.get("events") or []) for b in batches),
+            "lastAt": max(received, default=None),
+        }
+
     def latest_all(self, request_id: str) -> Iterator[dict]:
         base = self.root / "responses" / request_id
         if not base.is_dir():

@@ -51,4 +51,24 @@ python -m annoquest_server events <request id>                             # eve
 
 They use the same data directory as the app (`ANNOQUEST_SERVER_DATA_DIR`, or `--data-dir`). The signing secret for links is made on first use, in `<data dir>/secret`.
 
+## The owner page
+
+`mk_owner_app` is the same, as a page: every request with its readers, each reader's comments, answers and time per page (with downloads of the export), and a link maker. It reads the same data directory and is meant to be mounted **behind a sign-in that lets only the owner in** (on enlace: its own app with `access = "protected:user"` and `allowed_users`); every caller is treated as the owner. Pass `owners` and `identity` (e.g. `enlace_identity`) to also refuse anyone else in the app itself.
+
+```python
+from annoquest_server import enlace_identity, mk_owner_app
+
+app = mk_owner_app(viewer_url="https://your.site/annoquest/", owners=["you@example.org"], identity=enlace_identity, api_prefix="")
+```
+
+| method | path | what |
+|---|---|---|
+| GET | `/api/requests` | every request: title, kind, readers, devices, events, last activity |
+| GET | `/api/requests/<id>` | the latest revision |
+| GET | `/api/requests/<id>/events` | every event batch |
+| POST | `/api/links` `{url, reader?}` | a content link for a page |
+| GET | `/api/config` | the viewer's address |
+
+The page (`dist/owner.html`, or `annoquest owner-page --api <path> --out index.html` for a host that serves it separately) computes stats and exports in the browser with the library's fold, the same one `annoquest export` runs.
+
 Storage is write-once files, so a per-file backup keeps the whole history. To collect: copy the data directory and run `annoquest collect <dir>/responses/<id> <dir>/events/<id> --request request.json`, or `annoquest export <dir>/events/<id>` for comments and reading time.

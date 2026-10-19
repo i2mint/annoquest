@@ -1,6 +1,6 @@
 {
   "name": "annoquest",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Guided annotation requests, agent-first: give a reader documents and a prioritised list of items to read, check and annotate; answers autosave and autosubmit; collect them as an alignment summary.",
   "type": "module",
   "main": "dist/index.cjs",
@@ -34,13 +34,14 @@
     "llms.txt"
   ],
   "scripts": {
-    "build": "pnpm build:viewer && pnpm build:lib",
+    "build": "pnpm build:viewer && pnpm build:owner && pnpm build:lib",
     "build:lib": "tsup",
     "build:viewer": "vite build --config viewer/vite.config.ts && node scripts/finalize-viewer.mjs",
     "dev": "vite --config viewer/vite.config.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "smoke": "node dist/cli.js bake examples/request.json --out /tmp/annoquest-smoke.html --json && node dist/cli.js collect examples/responses --request examples/request.json --format markdown"
+    "smoke": "node dist/cli.js bake examples/request.json --out /tmp/annoquest-smoke.html --json && node dist/cli.js collect examples/responses --request examples/request.json --format markdown",
+    "build:owner": "vite build --config owner/vite.config.ts && node scripts/finalize-viewer.mjs dist/owner/index.html dist/owner.html"
   },
   "dependencies": {
     "approx-string-match": "^2.0.0",

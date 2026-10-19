@@ -7,5 +7,5 @@
 - [Spec (Zod, source of truth)](src/spec.ts): Request, Item, ResponseType, Responses, Event, EventBatch
 - [Event log](src/events.ts): the fold (final state + reading analytics) and the export
 - [Design](docs/design.md): data model, seams and their defaults, surfaces
-- [Server adapter](annoquest_server/README.md): API and storage layout
+- [Server adapter](annoquest_server/README.md): API and storage layout, owner commands, the owner page (`mk_owner_app`)
 - CLI: `annoquest schema` prints the JSON Schema; `annoquest presets` lists response types; every command prints JSON

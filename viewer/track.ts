@@ -5,7 +5,9 @@
  * Emits `open` once, `view` when the page changes, `visibility` when the tab is
  * hidden or shown, and a `beat` every `BEAT_MS` while visible (with `active`
  * when the reader scrolled, pointed or typed since the last one, and the page's
- * furthest scroll so far). The fold in src/events.ts turns these into time per
+ * furthest scroll so far). Depth is measured on every scroll and again at every
+ * beat, so a page reached without scrolling (an in-app route, a short page) still
+ * has one. The fold in src/events.ts turns these into time per
  * page; nothing here keeps totals.
  */
 import { BEAT_MS } from '../src/events';
@@ -24,16 +26,24 @@ const ACTIVITY = ['scroll', 'wheel', 'pointerdown', 'pointermove', 'keydown', 't
 export function createTracker(emit: (events: EventInput[]) => void, { beat = BEAT_MS, win = window }: { beat?: number; win?: Window } = {}): Tracker {
   let url: string | undefined;
   let active = false;
+  let shown: Document | undefined;
   const depth = new Map<string, number>();
   const watched = new WeakSet<Document>();
   const touch = () => void (active = true);
+  const measure = (doc: Document | undefined) => {
+    try {
+      const w = doc?.defaultView;
+      const el = doc?.scrollingElement ?? doc?.documentElement;
+      if (!w || !el || !url) return;
+      const d = Math.min(1, (w.scrollY + w.innerHeight) / Math.max(1, el.scrollHeight));
+      if (d > (depth.get(url) ?? 0)) depth.set(url, Math.round(d * 100) / 100);
+    } catch {
+      /* a document we can no longer reach (navigated away) */
+    }
+  };
   const scrolled = (doc: Document) => () => {
     touch();
-    const w = doc.defaultView;
-    const el = doc.scrollingElement ?? doc.documentElement;
-    if (!w || !el || !url) return;
-    const d = Math.min(1, (w.scrollY + w.innerHeight) / Math.max(1, el.scrollHeight));
-    if (d > (depth.get(url) ?? 0)) depth.set(url, Math.round(d * 100) / 100);
+    measure(doc);
   };
   const visible = () => win.document.visibilityState !== 'hidden';
   const onVisibility = () => emit([{ type: 'visibility', state: visible() ? 'visible' : 'hidden' }]);
@@ -43,6 +53,7 @@ export function createTracker(emit: (events: EventInput[]) => void, { beat = BEA
   for (const t of ACTIVITY) win.addEventListener(t, touch, { passive: true, capture: true });
   const timer = win.setInterval(() => {
     if (!visible() || !url) return;
+    measure(shown);
     emit([{ type: 'beat', url, active, ...(depth.has(url) ? { depth: depth.get(url) } : {}) }]);
     active = false;
   }, beat);
@@ -54,6 +65,7 @@ export function createTracker(emit: (events: EventInput[]) => void, { beat = BEA
       emit([{ type: 'view', url, ...(title ? { title } : {}) }]);
     },
     watch(doc) {
+      shown = doc;
       if (watched.has(doc)) return;
       watched.add(doc);
       const onScroll = scrolled(doc);

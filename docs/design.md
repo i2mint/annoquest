@@ -46,7 +46,7 @@ The server adapter is a small Python ASGI app (`annoquest_server`, in this repo)
 - **CLI** (`annoquest`): `schema`, `presets`, `check`, `bake`, `link`, `collect`. JSON on stdout, errors with a non-zero exit, nothing interactive.
 - **Viewer**: a single-file web app (React, zustand) built into `dist/viewer.html`; `bake` injects a request into it, and the server serves it as is.
 - **Shipped agent skill**: `skills/annoquest/SKILL.md`, the procedure for an agent building a request.
-- Asked and not built: MCP server (the primitives are already JSON-in/JSON-out and `toElicitation` exists; adding it needs no core change), encrypted `ntfy` sink (zero-config autosubmit through a third party; see Open questions), browser extension, an owner web page for exports and link-making (v0.2 does both from the command line).
+- Asked and not built: MCP server (the primitives are already JSON-in/JSON-out and `toElicitation` exists; adding it needs no core change), encrypted `ntfy` sink (zero-config autosubmit through a third party; see Open questions), browser extension. The owner web page came in v0.3 (below).
 
 ## Guidance UX (from the research)
 
@@ -118,4 +118,34 @@ A path, `thorwhalen.com/annoquest/`, not a subdomain: on the same origin as ever
 
 ### Not built in v0.2
 
-An owner web page (list requests, read exports, make links from a phone): needs a second, signed-in enlace app over the same data directory, and the CLI covers it for agents. Reading answers back across devices for a self-declared reader: it would let anyone who knows a reader's id read their comments.
+Reading answers back across devices for a self-declared reader: it would let anyone who knows a reader's id read their comments.
+
+## v0.3: the owner page
+
+The owner lists their requests, reads each reader's comments, answers and reading times, downloads the export, and makes links, from a phone. Nobody else sees any of it.
+
+### A second app over the same data directory
+
+The reader app stays public and owner-less (v0.2). The owner page is a separate app, `annoquest_server.mk_owner_app`, over the same data directory, meant to be mounted behind the platform's sign-in with the owner as its only allowed user (on tw: its own enlace app, `access = "protected:user"`, `allowed_users` the owner's addresses, like the other owner pages). Two apps because access is decided per app on the platform: one app cannot be public for readers and signed-in for its owner without the app judging identity itself, which is the platform's job. Every caller of the owner app is the owner. For defence in depth it takes `owners` and an `identity` function (default: none, trust the gate); given both, a caller whose identity is not an owner is refused, so a mistaken manifest fails closed.
+
+Its API (no prefix under a platform that mounts it at an API path, `/api` when served alone):
+
+| route | what |
+|---|---|
+| `GET /requests` | every request: id, title, kind (content or guided), the page for a content request, revisions, registered at, readers, devices, events, last activity |
+| `GET /requests/{id}` | the latest revision |
+| `GET /requests/{id}/events` | every event batch (what `python -m annoquest_server events` prints) |
+| `POST /links` `{url, reader?}` | a content link for a page, signed with the server's secret (what `python -m annoquest_server link` prints) |
+| `GET /config` | the viewer's address, so the page can show the link of an existing content request |
+
+It never writes events or requests: readers write, the owner reads. Deleting a reader's data stays a deliberate act on the server (move their event folders out), not a button.
+
+### The page: one more single-file build, the same fold
+
+`dist/owner.html` is built like the viewer (vite, one file, the same `</head>` escaping), from `owner/`. Stats and exports are computed in the browser with `foldBatches`, `exportLog` and `exportMarkdown` from the library, so the page, the CLI's `export` and any agent read one fold. `annoquest owner-page --api <path>` writes it with the API address baked in (as `annoquest viewer` does).
+
+Views are hash routes, each a history entry so Back walks back through them: `#/` (requests, newest activity first, and the link maker), `#/r/<id>` (the request: its link, its readers with time and comment counts, downloads for everyone), `#/r/<id>/<reader>` (one reader: comments with their passages, answers, a page table with time on screen, active time and furthest scroll, a download for that reader). Phone first: one column, tables become stacked rows below 600 px.
+
+### Scroll depth on in-app routes
+
+The tracker measured depth only on scroll events, so a page reached by an in-app route without scrolling had none (and so did a short page). It now also measures at every beat, on the document currently shown; depth stays the furthest seen per page.

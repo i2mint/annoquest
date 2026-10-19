@@ -1,0 +1,50 @@
+/* annoquest owner page: one column, phone first. */
+@import '../viewer/tokens.css';
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font); }
+button, input { font: inherit; color: inherit; }
+main { max-width: 860px; margin: 0 auto; padding: 0 16px 48px; }
+a { color: var(--accent); }
+h1 { font-size: 1.4rem; margin: 0.6em 0 0.2em; overflow-wrap: anywhere; }
+h2 { font-size: 1.1rem; margin: 1.2em 0 0.4em; }
+section { margin-top: 12px; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.top { display: flex; align-items: baseline; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.home { font-weight: 600; color: var(--ink); text-decoration: none; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 14px 14px; }
+.form { display: grid; gap: 10px; }
+.form label { display: grid; gap: 4px; font-size: 14px; }
+input { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); min-width: 0; }
+button, .btn { padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); cursor: pointer; text-decoration: none; color: var(--ink); white-space: nowrap; }
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); justify-self: start; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.linkbox { display: flex; gap: 6px; margin-top: 10px; }
+.linkbox input { flex: 1; font-size: 13px; }
+.cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.card { display: grid; gap: 2px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+.card:hover, .card:focus-visible { border-color: var(--accent); }
+.comments { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.comments li { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; overflow-wrap: anywhere; }
+.comments p { margin: 4px 0 0; white-space: pre-wrap; }
+blockquote { margin: 0; padding: 6px 10px; background: var(--quote); border-left: 3px solid var(--accent); border-radius: 4px; }
+.pages { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+.pages th, .pages td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+.pages th { font-size: 13px; color: var(--muted); font-weight: 500; }
+.error { color: var(--blk); }
+.skeleton { display: grid; gap: 8px; }
+.skeleton div { height: 64px; border-radius: var(--radius); background: linear-gradient(90deg, var(--panel), var(--line), var(--panel)); background-size: 200% 100%; animation: shimmer 1.2s infinite linear; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+@media (max-width: 600px) {
+  .pages, .pages tbody, .pages tr, .pages td { display: block; width: 100%; }
+  .pages thead { display: none; }
+  .pages tr { border-bottom: 1px solid var(--line); padding: 6px 0; }
+  .pages td { border: 0; padding: 2px 12px; display: flex; justify-content: space-between; gap: 12px; }
+  .pages td::before { content: attr(data-label); color: var(--muted); font-size: 13px; flex: none; }
+  .pages td[data-label='page'] { display: block; font-weight: 500; }
+  .pages td[data-label='page']::before { content: none; }
+}

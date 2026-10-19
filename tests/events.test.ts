@@ -2,6 +2,7 @@ import { parseHTML } from 'linkedom';
 import { describe, expect, it } from 'vitest';
 import {
   analytics,
+  contentLink,
   contentRequest,
   contentRequestId,
   createRequest,
@@ -163,5 +164,10 @@ describe('content links', () => {
     const r = createRequest({ title: 'Free', documents: [{ id: 'd', source: { kind: 'url', url: 'x' } }], items: [] });
     expect(r.items).toEqual([]);
     expect(foldResponses(r.id, []).extras).toEqual([]);
+  });
+
+  it('content links carry the page, its token and an optional reader, as the server writes them', () => {
+    expect(contentLink('https://example.org/annoquest/', 'https://example.org/a b', 'tok', { reader: 'ann' })).toBe('https://example.org/annoquest/?content=https%3A%2F%2Fexample.org%2Fa+b&t=tok&reader=ann');
+    expect(contentLink('https://example.org/v?x=1', 'https://example.org/', 'tok')).toBe('https://example.org/v?x=1&content=https%3A%2F%2Fexample.org%2F&t=tok');
   });
 });

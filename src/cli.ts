@@ -38,6 +38,7 @@ const HELP = `annoquest — guided annotation requests
                                                          from a request's event logs: each reader's final state
                                                          (answers, comments) and where they read, for how long
   annoquest viewer [--api <url>] [--out page.html]       the built viewer, pointed at a server's API (for hosting)
+  annoquest owner-page [--api <url>] [--out page.html]   the owner's page (requests, readers, exports, links), pointed at the owner API
   annoquest revise <request.json> --viewer <url> [--against <published.json>] [--api <url> [--header 'K: V']...]
                                                          a new revision under the same id: the diff, and a link whose
                                                          preview its sender publishes (or --api to publish directly)
@@ -95,10 +96,20 @@ async function loadDocuments(request: RequestT, overrides: Record<string, string
 
 const parseDom = (html: string) => parseHTML(html).document as unknown as Document;
 
-function viewerHtml(): string {
+/** A built page (`viewer.html`, `owner.html`), from beside the CLI or the repo's dist/. */
+function builtPage(name: string): string {
   const here = dirname(fileURLToPath(import.meta.url));
-  for (const p of [join(here, 'viewer.html'), join(here, '..', 'dist', 'viewer.html')]) if (existsSync(p)) return readFileSync(p, 'utf8');
-  throw new AnnoquestError('io', 'The built viewer (dist/viewer.html) is missing; run `pnpm build`.');
+  for (const p of [join(here, name), join(here, '..', 'dist', name)]) if (existsSync(p)) return readFileSync(p, 'utf8');
+  throw new AnnoquestError('io', `The built page (dist/${name}) is missing; run \`pnpm build\`.`);
+}
+
+const viewerHtml = () => builtPage('viewer.html');
+
+/** `page` with `<meta name="annoquest-api" content="api">` first in its head. */
+function withApi(page: string, api?: string): string {
+  if (!api) return page;
+  const meta = `<meta name="annoquest-api" content="${api.replace(/[&"<>]/g, (c) => `&#${c.charCodeAt(0)};`)}">`;
+  return /<head[^>]*>/i.test(page) ? page.replace(/<head([^>]*)>/i, (m) => `${m}${meta}`) : meta + page;
 }
 
 function collectInputs(args: string[]): unknown[] {
@@ -213,12 +224,9 @@ async function main(argv: string[]): Promise<number> {
       out(values.format === 'markdown' ? exportMarkdown(x, { request }) : { ...x, rejected });
       return 0;
     }
-    case 'viewer': {
-      let page = viewerHtml();
-      if (values.api) {
-        const meta = `<meta name="annoquest-api" content="${values.api.replace(/[&"<>]/g, (c) => `&#${c.charCodeAt(0)};`)}">`;
-        page = /<head[^>]*>/i.test(page) ? page.replace(/<head([^>]*)>/i, (m) => `${m}${meta}`) : meta + page;
-      }
+    case 'viewer':
+    case 'owner-page': {
+      const page = withApi(cmd === 'viewer' ? viewerHtml() : builtPage('owner.html'), values.api);
       if (values.out) {
         writeFileSync(values.out, page);
         out({ ok: true, out: values.out, bytes: page.length, api: values.api ?? '/api' });

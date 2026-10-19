@@ -12,5 +12,5 @@
     "noEmit": true,
     "isolatedModules": true
   },
-  "include": ["src", "tests", "viewer"], "exclude": ["viewer/vite.config.ts"]
+  "include": ["src", "tests", "viewer", "owner"], "exclude": ["viewer/vite.config.ts", "owner/vite.config.ts"]
 }

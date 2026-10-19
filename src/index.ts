@@ -38,4 +38,4 @@ export { parseResponses, mergeResponses, latestPerReader, readerKey, summarize, 
 export { toElicitation, type Elicitation } from './elicit';
 export { publishRevision, type RemoteOptions } from './remote';
 export { foldResponses, foldBatches, analytics, diffResponses, parseBatches, isBatch, batchReader, exportLog, exportMarkdown, DWELL_CAP_MS, BEAT_MS, type Analytics, type PageStats, type ReaderLog, type Export } from './events';
-export { contentRequest, contentRequestId, proxyUrl, originalUrl, pageKey, CONTENT_INTRO, type ContentOptions } from './content';
+export { contentLink, contentRequest, contentRequestId, proxyUrl, originalUrl, pageKey, CONTENT_INTRO, type ContentOptions } from './content';

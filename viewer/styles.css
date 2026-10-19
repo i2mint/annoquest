@@ -1,49 +1,5 @@
-/* annoquest viewer — tokens first; dark mode by media query unless a theme is forced. */
-:root {
-  --bg: #f7f6f3;
-  --panel: #ffffff;
-  --ink: #1d1d1f;
-  --muted: #6b6b70;
-  --line: #e4e2dc;
-  --accent: #b45309;
-  --accent-ink: #ffffff;
-  --must: #b45309;
-  --should: #2563eb;
-  --could: #6b7280;
-  --pos: #15803d;
-  --neu: #6b7280;
-  --att: #b45309;
-  --blk: #b91c1c;
-  --quote: #fdf6e3;
-  --radius: 10px;
-  --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --bg: #141416;
-    --panel: #1c1c1f;
-    --ink: #ececef;
-    --muted: #a1a1aa;
-    --line: #2e2e33;
-    --accent: #f59e0b;
-    --accent-ink: #1c1c1f;
-    --must: #f59e0b;
-    --should: #60a5fa;
-    --could: #a1a1aa;
-    --pos: #4ade80;
-    --neu: #a1a1aa;
-    --att: #fbbf24;
-    --blk: #f87171;
-    --quote: #2a2618;
-    color-scheme: dark;
-  }
-}
-:root[data-theme='dark'] {
-  --bg: #141416; --panel: #1c1c1f; --ink: #ececef; --muted: #a1a1aa; --line: #2e2e33; --accent: #f59e0b; --accent-ink: #1c1c1f;
-  --must: #f59e0b; --should: #60a5fa; --could: #a1a1aa; --pos: #4ade80; --neu: #a1a1aa; --att: #fbbf24; --blk: #f87171; --quote: #2a2618;
-  color-scheme: dark;
-}
+/* annoquest viewer. */
+@import './tokens.css';
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }

@@ -25,6 +25,12 @@ export async function contentRequestId(url: string, token: string): Promise<stri
   return `c-${toBase64Url(new Uint8Array(digest)).slice(0, 22)}`;
 }
 
+/** The link to send for a page: the viewer with the page, its site's token and optionally a reader (as the server's `content_link`). */
+export function contentLink(viewer: string, url: string, token: string, { reader }: { reader?: string } = {}): string {
+  const q = new URLSearchParams({ content: url, t: token, ...(reader ? { reader } : {}) });
+  return `${viewer}${viewer.includes('?') ? '&' : '?'}${q}`;
+}
+
 /** The proxy address of a page (the server serves it script-less, its links rewritten back through itself). */
 export const proxyUrl = (api: string, url: string, token: string) => `${api.replace(/\/$/, '')}/proxy?u=${encodeURIComponent(url)}&t=${encodeURIComponent(token)}`;
 

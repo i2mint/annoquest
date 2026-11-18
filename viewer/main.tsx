@@ -10,6 +10,7 @@ import { App } from './App';
 import { deviceId, deviceReader } from './device';
 import { loadRequest } from './load';
 import type { DataProvider } from '@zodal/store';
+import { bindDrafts, createDrafts, guardUnload } from './drafts';
 import { defaultStore, loadLocal, makeSink, mergeResponses, saveLocal, type HttpSink, type Stored } from './persist';
 import { useViewer } from './state';
 import { createTracker, type Tracker } from './track';
@@ -86,6 +87,11 @@ export async function mountViewer(root: HTMLElement, { store = defaultStore() }:
       else v.setSink({ kind: 'sent', at: '' });
       if (request.track) tracker = createTracker((events) => sink!.push(events));
     }
+
+    // The comment being written survives a reload; leaving with one unsaved asks first.
+    const kept = createDrafts({ request: request.id, reader: key });
+    bindDrafts(kept);
+    guardUnload(kept);
 
     // Every change: write locally at once, and send what changed as events.
     useViewer.subscribe((s, prev) => {

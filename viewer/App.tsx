@@ -14,6 +14,7 @@ import { mountShadowDocument } from './shadowdoc';
 import type { HttpSink } from './persist';
 import { publishRevision } from '../src/remote';
 import { itemHash } from '../src/request';
+import { drafts, type DraftValue } from './drafts';
 import { answered, modeOf, queue, tiers, useViewer, type ViewerState } from './state';
 
 const TIER_LABEL = { must: 'Most important', should: 'Important', could: 'If you have time' } as const;
@@ -50,11 +51,19 @@ function Guide({ request, sink, tracker }: { request: Request; sink: HttpSink | 
   const items = useMemo(() => queue(request, reader.id), [request, reader.id]);
   /** No items: a freeform request (the reader highlights and comments on anything). */
   const freeform = items.length === 0;
-  const [focused, setFocused] = useState<string | null>(null);
+  // A draft kept from before a reload reopens where it was: the edit box of a saved comment, or the new one.
+  const [kept] = useState(() => drafts()?.all() ?? []);
+  const [focused, setFocused] = useState<string | null>(() => {
+    const e = kept.find((d) => d.kind === 'edit' && responses?.extras.some((x) => x.id === d.id));
+    return e && e.kind === 'edit' ? e.id : null;
+  });
   const mode = modeOf(request, reader);
   const frames = useRef(new Map<string, DocFrame | null>());
   const [, bump] = useState(0);
-  const [selection, setSelection] = useState<{ doc: string; target: Target; text: string } | null>(null);
+  const keptNew = kept.find((d): d is Extract<DraftValue, { kind: 'new' }> => d.kind === 'new');
+  const [selection, setSelection] = useState<{ doc: string; target: Target; text: string } | null>(
+    keptNew ? { doc: keptNew.doc, target: keptNew.target, text: keptNew.text } : null,
+  );
 
   const currentItem = items.find((i) => i.id === current) ?? null;
   const docOfItem = (i: Item | null): Doc => request.documents.find((d) => d.id === i?.doc) ?? request.documents[0]!;
@@ -144,7 +153,7 @@ function Guide({ request, sink, tracker }: { request: Request; sink: HttpSink | 
   }, [view, current]);
 
   const selectionBox = request.allowExtra && selection && (freeform || view !== 'intro') && (
-    <SelectionBox selection={selection} url={pages[selection.doc]?.url} onDone={() => setSelection(null)} />
+    <SelectionBox selection={selection} url={keptNew?.url ?? pages[selection.doc]?.url} restored={keptNew?.comment} onDone={() => setSelection(null)} />
   );
   return (
     <div className={`layout${freeform ? ' freeform' : ''}`}>
@@ -656,10 +665,18 @@ function toneOf(i: Item, request: Request, r: ViewerState['responses']): Option[
 
 // ---------------------------------------------------------------------------
 
-function SelectionBox({ selection, url, onDone }: { selection: { doc: string; target: Target; text: string }; url?: string; onDone: () => void }) {
-  const [text, setText] = useState('');
-  const [open, setOpen] = useState(false);
+function SelectionBox({ selection, url, restored, onDone }: { selection: { doc: string; target: Target; text: string }; url?: string; restored?: string; onDone: () => void }) {
+  const [text, setText] = useState(restored ?? '');
+  const [open, setOpen] = useState(!!restored);
   const { addExtra } = useViewer.getState();
+  // Keep what is typed, as it is typed; it is cleared when the comment is saved or cancelled.
+  useEffect(() => {
+    drafts()?.set('new', open && text.trim() ? { kind: 'new', doc: selection.doc, target: selection.target, text: selection.text, ...(url ? { url } : {}), comment: text } : null);
+  }, [open, text, selection]);
+  const done = () => {
+    drafts()?.set('new', null);
+    onDone();
+  };
   if (!open)
     return (
       <div className="selection">
@@ -677,18 +694,19 @@ function SelectionBox({ selection, url, onDone }: { selection: { doc: string; ta
         Your comment
         <textarea autoFocus rows={3} value={text} onChange={(e) => setText(e.target.value)} />
       </label>
+      {text.trim() && <p className="hint draft">Not saved yet{restored && text === restored ? ' (restored after a reload)' : ''}.</p>}
       <div className="row">
         <button
           className="primary"
           disabled={!text.trim()}
           onClick={() => {
             addExtra({ doc: selection.doc, target: selection.target, comment: text.trim(), ...(url ? { url } : {}) });
-            onDone();
+            done();
           }}
         >
           Save comment
         </button>
-        <button onClick={onDone}>Cancel</button>
+        <button onClick={done}>Cancel</button>
       </div>
     </div>
   );
@@ -795,14 +813,27 @@ function Comments({ docs, focused, onFocused }: { docs: Doc[]; focused: string |
 
 function CommentRow({ x, elsewhere, open, onOpen }: { x: Extra; elsewhere: boolean; open: boolean; onOpen: (on: boolean) => void }) {
   const { editExtra, removeExtra } = useViewer.getState();
-  const [text, setText] = useState(x.comment);
+  const kept = useRef(((): string | undefined => {
+    const d = open ? drafts()?.get(`edit:${x.id}`) : undefined;
+    return d?.kind === 'edit' ? d.comment : undefined;
+  })());
+  const [text, setText] = useState(kept.current ?? x.comment);
   const ref = useRef<HTMLLIElement>(null);
   useEffect(() => {
     if (open) {
-      setText(x.comment);
+      // The first time, a restored draft stays; after that, opening starts from the saved text.
+      if (kept.current === undefined) setText(x.comment);
+      kept.current = undefined;
       ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
   }, [open]);
+  // Keep an edit in progress, as it is typed; closing (saved or cancelled) clears it.
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (open && text !== x.comment && text.trim()) drafts()?.set(`edit:${x.id}`, { kind: 'edit', id: x.id, comment: text });
+    else if (wasOpen.current || open) drafts()?.set(`edit:${x.id}`, null);
+    wasOpen.current = open;
+  }, [open, text]);
   const quote = x.target.quote?.exact ?? '';
   return (
     <li ref={ref} className={`comment${open ? ' open' : ''}`}>
@@ -814,6 +845,7 @@ function CommentRow({ x, elsewhere, open, onOpen }: { x: Extra; elsewhere: boole
             Your comment
             <textarea autoFocus rows={3} value={text} onChange={(e) => setText(e.target.value)} />
           </label>
+          {text !== x.comment && text.trim() && <p className="hint draft">Not saved yet.</p>}
           <div className="row">
             <button
               className="primary"

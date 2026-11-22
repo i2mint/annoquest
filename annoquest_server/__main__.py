@@ -46,7 +46,10 @@ def main(argv: list[str] | None = None) -> int:
             p.error(f"not an http(s) URL: {a.url}")
         if not a.viewer:
             p.error("say where the viewer is: --viewer https://example.org/annoquest/ (or set ANNOQUEST_VIEWER_URL)")
-        link = content_link(load_secret(root), a.url, viewer=a.viewer, reader=a.reader, lang=a.lang)
+        try:
+            link = content_link(load_secret(root), a.url, viewer=a.viewer, reader=a.reader, lang=a.lang)
+        except ValueError as e:
+            p.error(str(e))
         _out({"link": link, "content": a.url, "reader": a.reader, "lang": a.lang})
         return 0
     if a.cmd == "put-request":

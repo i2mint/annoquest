@@ -50,3 +50,23 @@ describe('viewer language', () => {
     expect(contentLink('https://v.test/', 'https://p.test/a', 'tok', { lang: 'fr' })).toMatch(/&lang=fr$/);
   });
 });
+
+describe('viewer language state', async () => {
+  const { useViewer } = await import('../viewer/state');
+  it('takes the first page lang, and keeps it when the reader follows a link', () => {
+    const v = useViewer.getState();
+    v.initLang({ param: null, browser: ['en-US'] });
+    expect(useViewer.getState().lang).toBe('en');
+    v.setPageLang('fr');
+    expect(useViewer.getState().lang).toBe('fr');
+    useViewer.getState().setPageLang(undefined); // a later page without lang
+    useViewer.getState().setPageLang('en');
+    expect(useViewer.getState().lang).toBe('fr');
+  });
+  it('lets the link lang win over the page', () => {
+    useViewer.setState({ langFrom: { browser: [] } });
+    useViewer.getState().initLang({ param: 'en', browser: ['fr-FR'] });
+    useViewer.getState().setPageLang('fr');
+    expect(useViewer.getState().lang).toBe('en');
+  });
+});

@@ -15,6 +15,7 @@ import { bakeRequest, inlineDocuments } from './bake';
 import { parseResponses, summarize, summaryMarkdown } from './collect';
 import { toElicitation } from './elicit';
 import { AnnoquestError } from './errors';
+import { LANGS, supported } from './lang';
 import { readLink, requestLink, specLink } from './link';
 import { presets } from './presets';
 import { renderRequest } from './render';
@@ -202,6 +203,7 @@ async function main(argv: string[]): Promise<number> {
     case 'link': {
       const { request } = requestAt(positionals[0]);
       if (!values.viewer) throw new AnnoquestError('invalid', '`annoquest link` needs --viewer <url> (where the viewer is served).');
+      if (values.lang && !supported(values.lang)) throw new AnnoquestError('invalid', `--lang ${values.lang}: the viewer speaks ${LANGS.join(', ')}.`);
       const opts = { reader: values.reader, lang: values.lang };
       out(values['spec-url'] ? specLink(values['spec-url'], values.viewer, opts) : requestLink(request, values.viewer, opts));
       return 0;

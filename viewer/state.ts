@@ -34,10 +34,11 @@ export interface ViewerState {
   /** The language the viewer speaks (see `i18n.ts` for how it is picked). */
   lang: Lang;
   /** What it was picked from: the link's `lang=` and the browser's languages; the page's comes later, when it loads. */
-  langFrom: { param?: string | null; browser: string[] };
+  langFrom: { param?: string | null; browser: string[]; page?: string | null; pageSeen?: boolean };
   /** Pick the language from the link and the browser (at start). */
   initLang(from: { param?: string | null; browser: readonly string[] }): void;
-  /** The annotated page loaded: its `<html lang>` now counts (below the link's, above the browser's). */
+  /** The first annotated page loaded: its `<html lang>` now counts (below the link's, above the
+   *  browser's). Only the first call counts: following a link to another page keeps the language. */
   setPageLang(page: string | null | undefined): void;
   init(p: { request: Request; reader: Partial<Reader> & { key: string }; responses: Responses }): void;
   fail(message: string): void;
@@ -82,7 +83,13 @@ export const useViewer = create<ViewerState>()(
         s.langFrom = { param: from.param, browser: [...from.browser] };
         s.lang = pickLang(from);
       }),
-    setPageLang: (page) => set((s) => void (s.lang = pickLang({ ...s.langFrom, page }))),
+    setPageLang: (page) =>
+      set((s) => {
+        if (s.langFrom.pageSeen) return;
+        s.langFrom.page = page ?? null;
+        s.langFrom.pageSeen = true;
+        s.lang = pickLang(s.langFrom);
+      }),
     init: ({ request, reader, responses }) =>
       set((s) => {
         s.request = request;

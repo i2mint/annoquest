@@ -2,8 +2,11 @@
  * The viewer's own words, per language: one message catalogue each (English is the
  * default and the reference, French first), and the rule that picks one.
  *
- * Language, in order: the link's `lang=` (set by whoever made the link), else the
- * annotated page's `<html lang>`, else the browser's languages, else English. A
+ * Language, in order (`pickLang`, in `src/lang.ts`): the link's `lang=` (set by whoever
+ * made the link), else the annotated page's `<html lang>` (the first page loaded; following
+ * a link does not change it), else the browser's languages, else English. Until the page
+ * has loaded, the panel shows the browser's language; a link made with `--lang` never
+ * switches. A
  * message missing from a catalogue cannot happen: every catalogue is typed as
  * `Messages`, so the type checker refuses an incomplete one.
  *
@@ -16,6 +19,7 @@
  */
 import { CONTENT_INTRO } from '../src/content';
 import type { Priority } from '../src/spec';
+import { DEFAULT_LANG, pickLang, supported, type Lang } from '../src/lang';
 
 const plural = (n: number, one: string, many: string) => (n > 1 ? many : one);
 
@@ -155,7 +159,7 @@ export const fr: Messages = {
   answerLabel: 'Réponse',
   yourCommentsLabel: 'Vos commentaires',
   tier: { must: 'Le plus important', should: 'Important', could: 'Si vous avez le temps' },
-  tierInline: { must: 'Le plus important', should: 'Important', could: 'Si vous avez le temps' },
+  tierInline: { must: 'le plus important', should: 'important', could: 'si vous avez le temps' },
   detachedOtherSite: "Ce document est sur un autre site : les passages ne peuvent pas y être surlignés. Chaque point montre son passage, avec un lien vers l'original.",
   cannotShow: 'Ce document ne peut pas être affiché ici. Chaque point montre son passage.',
   savedOnDevice: 'Enregistré sur cet appareil',
@@ -176,7 +180,7 @@ export const fr: Messages = {
   notPublished: (why) => `Non publié : ${why}`,
   from: (name) => `De ${name}`,
   answeringAs: (who) => ` · vous répondez en tant que ${who}`,
-  dueBy: (due) => ` · avant le ${due}`,
+  dueBy: (due) => ` · échéance : ${due}`,
   itemCount: (n) => `${n} ${plural(n, 'point', 'points')}`,
   aboutMinutes: (m) => ` · environ ${m} min`,
   startHint: (sentAutomatically) =>
@@ -208,7 +212,7 @@ export const fr: Messages = {
   readAck: "J'ai lu",
   toGo: (n) => `${n} ${plural(n, 'restant', 'restants')}`,
   allDone: 'tout est fait',
-  answered: 'répondu',
+  answered: 'avec réponse',
   notAnswered: 'sans réponse',
   selected: 'Sélection :',
   commentOnThis: 'Commenter ce passage',
@@ -216,7 +220,7 @@ export const fr: Messages = {
   restoredAfterReload: ' (restauré après un rechargement)',
   saveComment: 'Enregistrer le commentaire',
   cancel: 'Annuler',
-  nOfTotalAnswered: (n, total) => `${n} sur ${total} ${plural(n, 'répondu', 'répondus')}`,
+  nOfTotalAnswered: (n, total) => `${n} ${plural(n, 'réponse', 'réponses')} sur ${total}`,
   allDoneThanks: 'Tout est fait. Merci.',
   comeBack: (left) =>
     `Vous pouvez revenir ${plural(left, 'au point restant', `aux ${left} points restants`)} à tout moment depuis cette page ; vos réponses sont conservées.`,
@@ -241,25 +245,9 @@ export const fr: Messages = {
   edit: 'modifier',
 };
 
-/** Every catalogue, by primary language subtag. Add a language by adding a `Messages` here. */
-export const catalogues = { en, fr } as const satisfies Record<string, Messages>;
-export type Lang = keyof typeof catalogues;
-export const DEFAULT_LANG: Lang = 'en';
-
-/** The catalogue a BCP 47 tag maps to (`fr-CA` → `fr`), or undefined if there is none. */
-export function supported(tag: string | null | undefined): Lang | undefined {
-  const primary = tag?.trim().toLowerCase().split(/[-_]/)[0];
-  return primary && primary in catalogues ? (primary as Lang) : undefined;
-}
-
-/**
- * The reader's language: the link's `lang=`, else the page's `<html lang>`, else the first of
- * the browser's languages there is a catalogue for, else English. An unsupported value at one
- * level falls through to the next.
- */
-export function pickLang({ param, page, browser = [] }: { param?: string | null; page?: string | null; browser?: readonly string[] }): Lang {
-  return supported(param) ?? supported(page) ?? browser.map(supported).find(Boolean) ?? DEFAULT_LANG;
-}
+/** Every catalogue, by language (the list is `LANGS` in `src/lang.ts`; a missing one fails the type check). */
+export const catalogues: Record<Lang, Messages> = { en, fr };
+export { DEFAULT_LANG, pickLang, supported, type Lang };
 
 /** A request's intro as the reader should see it: the content links' default disclosure in their language, anything else as written. */
 export function introText(intro: string | undefined, t: Messages): string | undefined {

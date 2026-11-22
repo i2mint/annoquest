@@ -310,7 +310,8 @@ function DocView({ doc, hidden, onFrame, onRefresh, tracker, isFirstDoc }: { doc
       attached.current = surface.doc;
       const frame = new DocFrame(surface);
       report(surface.doc);
-      // The page's own language counts for the viewer's (below the link's lang=): the first document's.
+      // The page's own language counts for the viewer's (below the link's lang=): the first page of
+      // the first document only (setPageLang ignores later calls, e.g. after following a link).
       if (isFirstDoc) useViewer.getState().setPageLang(surface.doc.documentElement.lang);
       tracker?.watch(surface.doc);
       // An app's own routes (#/…) are pages too; the document stays, so say when the route changes.
@@ -352,7 +353,8 @@ function ShadowDocView({ doc, html, baseUrl, hidden, onFrame, isFirstDoc }: { do
   useEffect(() => {
     try {
       const { shadow, body } = mountShadowDocument(host.current!, html, { baseUrl });
-      if (isFirstDoc) useViewer.getState().setPageLang(/<html\b[^>]*\blang\s*=\s*["']?([\w-]+)/i.exec(html)?.[1]);
+      // mountShadowDocument copies the parsed document's lang onto the root around `body`.
+      if (isFirstDoc) useViewer.getState().setPageLang(body.parentElement?.getAttribute('lang'));
       onFrame(doc.id, new DocFrame(shadowSurface(shadow, body, scroller.current!, doc.id)));
       useViewer.getState().setPage(doc.id, { url: doc.href ?? `#${doc.id}` });
     } catch (e) {

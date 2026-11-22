@@ -115,6 +115,10 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
 .comment .quote { color: var(--muted); font-style: italic; }
 .comment .text { white-space: pre-line; }
 .comment .page { font-size: 12px; overflow-wrap: anywhere; }
+/* Review groups: a thread's replies sit indented under its first comment; a resolved thread fades. */
+.discussion .replies { margin: 0 0 0 12px; padding-left: 10px; border-left: 2px solid var(--line); gap: 6px; }
+.discussion .comment.resolved { opacity: 0.65; }
+.discussion .comment.resolved:focus-within, .discussion .comment.resolved.open { opacity: 1; }
 .danger { color: var(--blk); margin-left: auto; }
 
 @media (max-width: 760px) {

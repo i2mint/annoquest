@@ -194,8 +194,14 @@ export const Extra = z.object({
   at: z.string(),
   /** Increases with every edit; the highest wins in a merge (absent reads as 0). */
   rev: z.number().int().nonnegative().optional(),
+  /** A reply: the id of the comment it answers (any reader's, in a review group). It keeps that comment's target. */
+  parent: z.string().min(1).optional(),
 });
 export type Extra = z.infer<typeof Extra>;
+
+/** A reader marking a comment handled (or open again). Counts for the group only from the comment's author or the owner. */
+export const Resolution = z.object({ resolved: z.boolean(), at: z.string() });
+export type Resolution = z.infer<typeof Resolution>;
 
 export const Responses = z.object({
   schema: z.literal('annoquest/responses').default('annoquest/responses'),
@@ -206,6 +212,8 @@ export const Responses = z.object({
   extras: z.array(Extra).default([]),
   /** Ids of extras the reader removed: a tombstone, so a merge with an older copy cannot bring them back. */
   removed: z.array(z.string()).default([]),
+  /** What this reader marked resolved or reopened, by comment id (theirs or, in a review group, another reader's). */
+  resolutions: z.record(z.string(), Resolution).optional(),
   updatedAt: z.string(),
   finishedAt: z.string().optional(),
   /** Set by a server from its identity header; never trusted from a client. */
@@ -239,6 +247,8 @@ export const Event = z.discriminatedUnion('type', [
   z.object({ ...EventBase, type: z.literal('answer'), item: z.string().min(1), answer: Answer }),
   z.object({ ...EventBase, type: z.literal('extra'), extra: Extra }),
   z.object({ ...EventBase, type: z.literal('remove'), extra: z.string().min(1) }),
+  /** A comment marked resolved (`true`) or open again (`false`). */
+  z.object({ ...EventBase, type: z.literal('resolve'), extra: z.string().min(1), resolved: z.boolean() }),
   z.object({ ...EventBase, type: z.literal('name'), name: z.string() }),
   z.object({ ...EventBase, type: z.literal('finish') }),
 ]);
@@ -257,7 +267,13 @@ export const EventBatch = z.object({
   /** The reader's own details, as on `Responses`. */
   person: Person.optional(),
   events: z.array(Event),
+  /** The review group the reader's link belongs to (`?g=`): its members read each other's comments. */
+  group: z.string().min(1).optional(),
+  /** The group's token from the link (`?gt=`), which the server checks before storing a grouped batch; not stored. */
+  groupToken: z.string().min(1).optional(),
   /** Set by a server from its identity header; never trusted from a client. */
   by: z.string().nullish(),
+  /** Set by a server on what its owner sends (a resolve from the owner page); never trusted from a client. */
+  role: z.literal('owner').optional(),
 });
 export type EventBatch = z.infer<typeof EventBatch>;

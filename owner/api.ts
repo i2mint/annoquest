@@ -36,5 +36,8 @@ export const api = {
   requests: async () => z.object({ requests: z.array(RequestSummary) }).parse(await call('/requests')).requests,
   request: async (id: string) => Request.parse(await call(`/requests/${encodeURIComponent(id)}`)),
   events: async (id: string) => parseBatches(z.object({ batches: z.array(z.unknown()) }).parse(await call(`/requests/${encodeURIComponent(id)}/events`)).batches),
-  link: async (url: string, reader?: string) => z.object({ link: z.string() }).parse(await call('/links', { method: 'POST', body: JSON.stringify({ url, reader: reader || undefined }) })).link,
+  link: async (url: string, reader?: string, group?: string) =>
+    z.object({ link: z.string() }).parse(await call('/links', { method: 'POST', body: JSON.stringify({ url, reader: reader || undefined, group: group || undefined }) })).link,
+  /** Mark a reader's comment resolved (or open again): the review group's readers see it. */
+  resolve: async (id: string, extra: string, resolved: boolean) => call(`/requests/${encodeURIComponent(id)}/resolve`, { method: 'POST', body: JSON.stringify({ extra, resolved }) }),
 };

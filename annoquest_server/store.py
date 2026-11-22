@@ -84,7 +84,32 @@ def merge_responses(saves: list[dict]) -> dict | None:
     return out
 
 
-EVENT_TYPES = {"open", "view", "visibility", "beat", "answer", "extra", "remove", "name", "finish"}
+EVENT_TYPES = {"open", "view", "visibility", "beat", "answer", "extra", "remove", "resolve", "name", "finish"}
+
+#: What a review group's members read of each other (``GET .../groups/<group>``): comments, never reading times.
+GROUP_EVENT_TYPES = {"extra", "remove", "resolve", "name"}
+#: Group names: short and plain, as they ride in links and URL paths.
+GROUP_NAME_MAX = 64
+GROUP_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,%d}$" % GROUP_NAME_MAX)
+
+
+def valid_group(name: object) -> bool:
+    """Whether ``name`` is a usable review-group name (letters, digits, ``_ . -``; at most 64)."""
+    return isinstance(name, str) and bool(GROUP_NAME_RE.match(name))
+
+
+def _event_fields_ok(e: dict) -> bool:
+    """The per-type fields the fold reads, for the event types groups share (a malformed one would
+    make the TypeScript fold drop its whole batch)."""
+    t = e.get("type")
+    if t == "resolve":
+        return isinstance(e.get("extra"), str) and bool(e["extra"]) and isinstance(e.get("resolved"), bool)
+    if t == "remove":
+        return isinstance(e.get("extra"), str) and bool(e["extra"])
+    if t == "extra":
+        x = e.get("extra")
+        return isinstance(x, dict) and isinstance(x.get("id"), str) and (x.get("parent") is None or (isinstance(x["parent"], str) and bool(x["parent"])))
+    return True
 
 
 def well_formed_batch(batch: object, *, max_events: int = 500) -> bool:
@@ -96,6 +121,7 @@ def well_formed_batch(batch: object, *, max_events: int = 500) -> bool:
         all(isinstance(batch.get(k), str) and batch.get(k) for k in ("request", "reader", "device"))
         and len(batch["reader"]) <= 254
         and len(batch["device"]) <= 64
+        and (batch.get("group") is None or valid_group(batch["group"]))
         and isinstance(events, list)
         and 0 < len(events) <= max_events
         and all(
@@ -105,6 +131,7 @@ def well_formed_batch(batch: object, *, max_events: int = 500) -> bool:
             and isinstance(e.get("session"), str)
             and isinstance(e.get("seq"), int)
             and isinstance(e.get("at"), str)
+            and _event_fields_ok(e)
             for e in events
         )
     )
@@ -224,10 +251,40 @@ class Store:
 
     def add_events(self, request_id: str, batch: dict, *, by: str | None, client: dict | None = None) -> str:
         """Append one batch (as sent, plus who the server says sent it and, when given, its
-        ``client`` details such as ``client_ip``/``user_agent``); returns its file name."""
+        ``client`` details such as ``client_ip``/``user_agent``); returns its file name.
+
+        A batch of a review group (``group``) or of the owner (``role``) is also written, reduced
+        to what the group reads, to the group's own folder, so a group read never walks every
+        device's reading events."""
         name = f"{_stamp()}.json"
         _write_once(self._device_dir(request_id, batch["device"]) / name, {**batch, **({"by": by} if by else {}), **(client or {}), "receivedAt": _now()})
+        shared = self._group_copy(batch, by=by)
+        if shared is not None:
+            folder = "_owner" if batch.get("role") == "owner" else reader_key(f"group:{batch['group']}", self.salt)
+            _write_once(self.root / "groups" / request_id / folder / name, shared)
         return name
+
+    def _group_copy(self, batch: dict, *, by: str | None) -> dict | None:
+        """What a review group may read of ``batch``: its comment events, under its reader key (the
+        server-asserted identity when there is one), with the device id replaced by a salted hash.
+        None for a batch that is in no group, or has no comment events."""
+        if not batch.get("group") and batch.get("role") != "owner":
+            return None
+        events = [e for e in batch.get("events") or [] if isinstance(e, dict) and e.get("type") in GROUP_EVENT_TYPES]
+        if not events:
+            return None
+        out = {
+            "schema": "annoquest/events",
+            "request": batch["request"],
+            # The device id is a reader's only key to their own events: never share it.
+            "device": reader_key(f"device:{batch['device']}", self.salt)[:16],
+            "reader": by.lower() if by and batch.get("role") != "owner" else batch["reader"],
+            "events": events,
+        }
+        for k in ("person", "group", "role"):
+            if k in batch:
+                out[k] = batch[k]
+        return out
 
     def _batches(self, d: Path) -> Iterator[dict]:
         for f in sorted(d.glob("*.json")) if d.is_dir() else []:
@@ -243,6 +300,13 @@ class Store:
         base = self.root / "events" / request_id
         out = [b for d in (sorted(base.iterdir()) if base.is_dir() else []) for b in self._batches(d)]
         return [b for b in out if b.get("by") == by] if by is not None else out
+
+    def group_events(self, request_id: str, group: str) -> list[dict]:
+        """What a review group reads: the comment events (``GROUP_EVENT_TYPES``) sent through the
+        group's links, and the owner's, from the group's own folder (written by ``add_events``).
+        No reading times, no client details, no device ids."""
+        base = self.root / "groups" / request_id
+        return [*self._batches(base / reader_key(f"group:{group}", self.salt)), *self._batches(base / "_owner")]
 
     def request_ids(self) -> list[str]:
         """Every registered request's id."""

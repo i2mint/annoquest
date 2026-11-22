@@ -21,8 +21,11 @@ import secrets
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
+from .store import valid_group
+
 #: What a token is computed over, so a token for one purpose never doubles as another.
 _TOKEN_CONTEXT = "annoquest/content-origin/v1"
+_GROUP_CONTEXT = "annoquest/review-group/v1"
 
 
 def _b64(raw: bytes) -> str:
@@ -77,6 +80,29 @@ def token_allows(secret: bytes, token: str | None, url: str) -> bool:
     return hmac.compare_digest(site_token(secret, url), token)
 
 
+def group_scope(request: dict) -> str | None:
+    """What a review group's token is bound to: a content request's site, so one group can review
+    several pages of it. Because of that, a group name is the group's on the whole site: reuse a
+    name only for the same people. Requests that are not content requests have no groups (None)."""
+    content = request.get("content")
+    if isinstance(content, dict) and isinstance(content.get("url"), str):
+        return origin_of(content["url"])
+    return None
+
+
+def group_token(secret: bytes, scope: str, group: str) -> str:
+    """The token that lets a link join review group ``group`` of ``scope`` (see :func:`group_scope`)."""
+    return _b64(hmac.new(secret, f"{_GROUP_CONTEXT}\n{scope}\n{group}".encode("utf-8"), hashlib.sha256).digest()[:16])
+
+
+def group_allows(secret: bytes, token: str | None, request: dict, group: str | None) -> bool:
+    """Whether ``token`` is the server's token for review group ``group`` of ``request``."""
+    scope = group_scope(request)
+    if not token or not group or scope is None:
+        return False
+    return hmac.compare_digest(group_token(secret, scope, group), token)
+
+
 def content_request_id(url: str, token: str) -> str:
     return "c-" + _b64(hashlib.sha256(f"{token}\n{url}".encode("utf-8")).digest())[:22]
 
@@ -97,10 +123,16 @@ def is_content_request(secret: bytes, request: dict) -> bool:
 VIEWER_LANGS = ("en", "fr")
 
 
-def content_link(secret: bytes, url: str, *, viewer: str, reader: str | None = None, lang: str | None = None) -> str:
+def content_link(
+    secret: bytes, url: str, *, viewer: str, reader: str | None = None, lang: str | None = None, group: str | None = None
+) -> str:
     """The link to send: ``viewer`` with the page, its site's token, and optionally a reader id and
     the viewer's language (``lang``, e.g. ``"fr"``; without it the viewer follows the page's
-    ``<html lang>``, then the reader's browser). An unsupported ``lang`` raises ``ValueError``."""
+    ``<html lang>``, then the reader's browser). An unsupported ``lang`` raises ``ValueError``.
+
+    With ``group``, the link joins that review group (``g=`` and its token ``gt=``): everyone
+    holding a link of the group sees, answers and resolves the group's comments. Without it a
+    reader sees only their own comments."""
     if lang and lang.strip().lower().replace("_", "-").split("-")[0] not in VIEWER_LANGS:
         raise ValueError(f"lang {lang!r}: the viewer speaks {', '.join(VIEWER_LANGS)}")
     params = {"content": url, "t": site_token(secret, url)}
@@ -108,4 +140,12 @@ def content_link(secret: bytes, url: str, *, viewer: str, reader: str | None = N
         params["reader"] = reader
     if lang:
         params["lang"] = lang
+    if group:
+        if not valid_group(group):
+            raise ValueError(f"group {group!r}: use letters, digits, '_', '.' or '-' (at most 64)")
+        scope = origin_of(url)
+        if scope is None:
+            raise ValueError(f"Not an http(s) URL: {url!r}")
+        params["g"] = group
+        params["gt"] = group_token(secret, scope, group)
     return f"{viewer}{'&' if '?' in viewer else '?'}{urlencode(params)}"

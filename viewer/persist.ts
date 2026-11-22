@@ -13,7 +13,7 @@
 import type { DataProvider } from '@zodal/store';
 import { createLocalStorageProvider } from '@zodal/store-localstorage';
 import { mergeResponses } from '../src/collect';
-import { foldBatches, parseBatches } from '../src/events';
+import { foldBatches, parseBatches, type ReaderLog } from '../src/events';
 import { newId } from '../src/request';
 import type { Event, EventBatch, EventInput, Person, Request, Responses } from '../src/spec';
 import { messages } from './state';
@@ -63,6 +63,8 @@ export interface HttpSink {
   latest(): Promise<Request | undefined>;
   /** This reader's state as the server holds it: their events (this device's, without a gateway) folded. */
   mine(): Promise<Responses | undefined>;
+  /** The review group's comments, every member's (and the owner's resolves), folded per reader; undefined without a group or when unreachable. */
+  group(): Promise<ReaderLog[] | undefined>;
   /** Who is sending: set once the reader is known, before the first push. */
   identify(who: { reader: string; person?: Person }): void;
   /** Queue events; they are sent shortly. `quiet` ones (page views, beats) do not change the save state. */
@@ -92,13 +94,15 @@ export interface SinkOptions {
   maxBackoff?: number;
   /** Where unsent events are kept between page loads (default: localStorage). */
   outboxStorage?: () => Storage;
+  /** The review group the link belongs to (`?g=`, `?gt=`): batches carry it, and `group()` reads the group's comments. */
+  group?: { name: string; token: string };
 }
 
 export function createHttpSink(
   base: string,
   requestId: string,
   onState: (s: SinkState) => void,
-  { device, delay = 1500, maxBackoff = 60000, outboxStorage = () => localStorage }: SinkOptions,
+  { device, delay = 1500, maxBackoff = 60000, outboxStorage = () => localStorage, group }: SinkOptions,
 ): HttpSink {
   const api = base.replace(/\/$/, '');
   const at = (p: string) => `${api}${p}`;
@@ -143,7 +147,15 @@ export function createHttpSink(
     const first = outbox[0]!;
     const take = outbox.filter((b) => b.reader === first.reader).slice(0, BATCH);
     return {
-      batch: { schema: 'annoquest/events', request: requestId, reader: first.reader, device, person: first.person, events: take.map((b) => b.event) },
+      batch: {
+        schema: 'annoquest/events',
+        request: requestId,
+        reader: first.reader,
+        device,
+        person: first.person,
+        events: take.map((b) => b.event),
+        ...(group ? { group: group.name, groupToken: group.token } : {}),
+      },
       ids: new Set(take.map((b) => b.event.id)),
     };
   };
@@ -286,6 +298,12 @@ export function createHttpSink(
       const old = legacy && typeof legacy === 'object' && 'answers' in legacy ? (legacy as Responses) : undefined;
       if (folded && old) return mergeResponses(folded, old);
       return folded ?? old;
+    },
+    async group() {
+      if (!group) return undefined;
+      const got = await getJson(`/requests/${encodeURIComponent(requestId)}/groups/${encodeURIComponent(group.name)}?t=${encodeURIComponent(group.token)}`);
+      if (!got) return undefined;
+      return foldBatches(requestId, parseBatches((got.batches as unknown[]) ?? []).batches);
     },
     identify(w) {
       who = w;

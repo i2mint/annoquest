@@ -21,6 +21,8 @@ import secrets
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
+from .store import valid_group
+
 #: What a token is computed over, so a token for one purpose never doubles as another.
 _TOKEN_CONTEXT = "annoquest/content-origin/v1"
 _GROUP_CONTEXT = "annoquest/review-group/v1"
@@ -79,13 +81,13 @@ def token_allows(secret: bytes, token: str | None, url: str) -> bool:
 
 
 def group_scope(request: dict) -> str | None:
-    """What a review group's token is bound to: a content request's site (so one group can review
-    several pages of it), else the request's id."""
+    """What a review group's token is bound to: a content request's site, so one group can review
+    several pages of it. Because of that, a group name is the group's on the whole site: reuse a
+    name only for the same people. Requests that are not content requests have no groups (None)."""
     content = request.get("content")
     if isinstance(content, dict) and isinstance(content.get("url"), str):
         return origin_of(content["url"])
-    rid = request.get("id")
-    return rid if isinstance(rid, str) and rid else None
+    return None
 
 
 def group_token(secret: bytes, scope: str, group: str) -> str:
@@ -139,6 +141,8 @@ def content_link(
     if lang:
         params["lang"] = lang
     if group:
+        if not valid_group(group):
+            raise ValueError(f"group {group!r}: use letters, digits, '_', '.' or '-' (at most 64)")
         scope = origin_of(url)
         if scope is None:
             raise ValueError(f"Not an http(s) URL: {url!r}")

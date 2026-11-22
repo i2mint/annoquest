@@ -49,6 +49,8 @@ export interface ReaderLog {
   reader: string;
   /** `owner` for what the server's owner sent (a resolve from the owner page). */
   role?: 'owner';
+  /** The review groups this reader's batches were sent through (`?g=`), if any. */
+  groups?: string[];
   person?: Person;
   devices: string[];
   responses: Responses;
@@ -169,13 +171,14 @@ export function analytics(events: Array<Event & { device?: string }>, { cap = DW
 
 /** Every reader's final state and analytics, from event batches (any order, resends included). */
 export function foldBatches(request: string, batches: EventBatch[]): ReaderLog[] {
-  const readers = new Map<string, { person?: Person; role?: 'owner'; devices: Set<string>; events: Map<string, Event & { device: string }> }>();
+  const readers = new Map<string, { person?: Person; role?: 'owner'; groups: Set<string>; devices: Set<string>; events: Map<string, Event & { device: string }> }>();
   for (const b of batches) {
     if (b.request !== request) continue;
     // The owner is one reader whatever their identity says, and never merged with a reader of the same name.
     const k = b.role === 'owner' ? `role:${OWNER_KEY}` : `reader:${batchReader(b)}`;
-    const r = readers.get(k) ?? readers.set(k, { devices: new Set(), events: new Map() }).get(k)!;
+    const r = readers.get(k) ?? readers.set(k, { groups: new Set(), devices: new Set(), events: new Map() }).get(k)!;
     if (b.role === 'owner') r.role = 'owner';
+    if (b.group) r.groups.add(b.group);
     r.devices.add(b.device);
     if (b.person && (b.person.name || b.person.email || b.person.id)) r.person = { ...r.person, ...b.person };
     for (const e of b.events) if (!r.events.has(e.id)) r.events.set(e.id, { ...e, device: b.device });
@@ -187,7 +190,7 @@ export function foldBatches(request: string, batches: EventBatch[]): ReaderLog[]
     const responses = foldResponses(request, events, { person });
     const by = r.role ? undefined : batches.find((b) => b.role !== 'owner' && batchReader(b) === reader && b.by)?.by;
     const log: ReaderLog = { reader, person: responses.reader, devices: [...r.devices], responses: by ? { ...responses, by } : responses, analytics: analytics(events) };
-    return r.role ? { ...log, role: r.role } : log;
+    return { ...log, ...(r.role ? { role: r.role } : {}), ...(r.groups.size ? { groups: [...r.groups].sort() } : {}) };
   });
 }
 
@@ -208,19 +211,26 @@ export interface Thread {
   root: ThreadComment;
   /** Replies to the root or to each other, oldest first. */
   replies: ThreadComment[];
-  /** The latest resolve or reopen of the root by its author or the owner; absent while never resolved. */
-  resolution?: Resolution & { by: string };
+  /** The latest resolve or reopen of the root by its author or the owner (the owner wins a tie); absent while never resolved.
+   *  `byOwner` says it was the owner: label from it, never from `by`, which a reader can choose. */
+  resolution?: Resolution & { by: string; byOwner: boolean };
 }
 
 /**
  * The group's comments as threads: every reader's comments, replies under the comment they
  * answer (nested replies flattened under their root), oldest thread first. A comment counts as
  * resolved when the latest resolve or reopen of it comes from its author or the owner; resolves
- * from anyone else are ignored.
+ * from anyone else are ignored. With `group`, only that group's readers (and the owner) count:
+ * use it wherever logs from several groups, or from readers in none, are mixed (the owner page,
+ * the export).
  */
-export function groupThreads(logs: ReadonlyArray<Pick<ReaderLog, 'reader' | 'role' | 'person' | 'responses'>>): Thread[] {
+export function groupThreads(
+  logs: ReadonlyArray<Pick<ReaderLog, 'reader' | 'role' | 'person' | 'responses' | 'groups'>>,
+  { group }: { group?: string } = {},
+): Thread[] {
+  if (group !== undefined) logs = logs.filter((l) => l.role || l.groups?.includes(group));
   const all = new Map<string, ThreadComment>();
-  for (const l of logs) for (const x of l.responses.extras) all.set(x.id, { reader: l.reader, person: l.person, extra: x });
+  for (const l of logs) if (!l.role) for (const x of l.responses.extras) all.set(x.id, { reader: l.reader, person: l.person, extra: x });
   const rootOf = (c: ThreadComment): ThreadComment => {
     const seen = new Set<string>();
     let cur = c;
@@ -239,9 +249,12 @@ export function groupThreads(logs: ReadonlyArray<Pick<ReaderLog, 'reader' | 'rol
   }
   for (const t of threads.values()) {
     for (const l of logs) {
-      if (l.reader !== t.root.reader && l.role !== 'owner') continue;
+      const owner = l.role === 'owner';
+      if (!owner && l.reader !== t.root.reader) continue;
       const r = l.responses.resolutions?.[t.root.extra.id];
-      if (r && (!t.resolution || r.at >= t.resolution.at)) t.resolution = { ...r, by: l.role === 'owner' ? OWNER_KEY : l.reader };
+      if (!r) continue;
+      const cur = t.resolution;
+      if (!cur || r.at > cur.at || (r.at === cur.at && owner && !cur.byOwner)) t.resolution = { ...r, by: owner ? OWNER_KEY : l.reader, byOwner: owner };
     }
   }
   return [...threads.values()].sort((a, b) => byAt(a.root, b.root));
@@ -321,13 +334,16 @@ export function exportMarkdown(x: Export, { request }: { request?: Request } = {
       lines.push('');
     }
   }
-  const threads = groupThreads(x.readers);
-  if (threads.some((t) => t.replies.length || t.resolution)) {
-    const name = (c: ThreadComment) => c.person?.name ?? c.reader;
-    lines.push('## Discussion', '');
+  // One discussion per review group (a reader outside every group has no discussion to show).
+  const groups = [...new Set(x.readers.flatMap((r) => r.groups ?? []))].sort();
+  const name = (c: ThreadComment) => c.person?.name ?? c.reader;
+  for (const g of groups) {
+    const threads = groupThreads(x.readers, { group: g });
+    if (!threads.length) continue;
+    lines.push(groups.length > 1 ? `## Discussion: ${g}` : '## Discussion', '');
     for (const t of threads) {
       const q = t.root.extra.target.quote;
-      const status = t.resolution?.resolved ? ` (resolved by ${t.resolution.by === OWNER_KEY ? 'the owner' : t.resolution.by})` : '';
+      const status = t.resolution?.resolved ? ` (resolved by ${t.resolution.byOwner ? 'the owner' : t.resolution.by})` : '';
       lines.push(`- ${q ? `“${one(q.exact).slice(0, 120)}” — ` : ''}**${name(t.root)}**: ${one(t.root.extra.comment)}${status}`);
       for (const r of t.replies) lines.push(`  - **${name(r)}**: ${one(r.extra.comment)}`);
     }

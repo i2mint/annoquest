@@ -28,7 +28,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Respon
 from starlette.routing import Route
 
 from .content import content_link, load_secret, origin_of
-from .store import GROUP_NAME_MAX, Store, valid_id
+from .store import Store, reader_key, valid_group, valid_id
 from .web import default_data_dir
 
 MAX_LINK_BODY_BYTES = 8 * 1024
@@ -116,8 +116,8 @@ def mk_owner_app(
         url = (data.get("url") or "").strip() if isinstance(data, dict) else ""
         reader = ((data.get("reader") or "").strip() or None) if isinstance(data, dict) else None
         group = ((data.get("group") or "").strip() or None) if isinstance(data, dict) else None
-        if group and len(group) > GROUP_NAME_MAX:
-            return _err(400, "That group name is too long.")
+        if group and not valid_group(group):
+            return _err(400, "A group name is letters, digits, '_', '.' or '-', at most 64.")
         if len(url) > MAX_URL_CHARS or origin_of(url) is None:
             return _err(400, "Give the page's full address (http:// or https://).")
         if reader and len(reader) > MAX_READER_CHARS:
@@ -144,9 +144,13 @@ def mk_owner_app(
         resolved = data.get("resolved", True) if isinstance(data, dict) else None
         if not isinstance(extra, str) or not extra or len(extra) > 200 or not isinstance(resolved, bool):
             return _err(400, 'Send {"extra": "<comment id>", "resolved": true|false}.')
-        at = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
-        event = {"id": secrets.token_urlsafe(9), "session": "owner", "seq": time.time_ns() // 1_000_000, "at": at, "type": "resolve", "extra": extra, "resolved": resolved}
-        batch = {"schema": "annoquest/events", "request": rid, "reader": "owner", "device": "owner", "role": "owner", "events": [event]}
+        now_ms = time.time_ns() // 1_000_000
+        at = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now_ms / 1000)) + f".{now_ms % 1000:03d}Z"  # as a browser's toISOString
+        event = {"id": secrets.token_urlsafe(9), "session": "owner", "seq": now_ms, "at": at, "type": "resolve", "extra": extra, "resolved": resolved}
+        # A device id nobody can guess (it is the key to reading a device's events back): the owner's
+        # events are read only through the owner app and, reduced, through a group read.
+        device = "owner-" + reader_key("owner-device", store.salt)[:24]
+        batch = {"schema": "annoquest/events", "request": rid, "reader": "owner", "device": device, "role": "owner", "events": [event]}
         who = (identity(req) if identity else None) or None
         store.add_events(rid, batch, by=who)
         return JSONResponse({"saved": True, "event": event}, status_code=201)

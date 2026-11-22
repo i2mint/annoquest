@@ -17,7 +17,8 @@ import { itemHash } from '../src/request';
 import { drafts, type DraftValue } from './drafts';
 import { answered, modeOf, queue, tiers, useT, useViewer, type ViewerState } from './state';
 import { fill, introText } from './i18n';
-import { groupThreads, OWNER_KEY, type Thread, type ThreadComment } from '../src/events';
+import { groupThreads, type Thread, type ThreadComment } from '../src/events';
+import { mergeResponses } from '../src/collect';
 const TONE_CLASS: Record<Option['tone'], string> = { positive: 'tone-pos', neutral: 'tone-neu', attention: 'tone-att', blocking: 'tone-blk' };
 
 // ---------------------------------------------------------------------------
@@ -84,11 +85,9 @@ function Guide({ request, sink, tracker }: { request: Request; sink: HttpSink | 
 
   // Paint and reveal whenever the current item, answers, or a frame change.
   const group = useViewer((s) => s.group);
+  const me = useSelfKey();
   // In a review group, the other members' comments are highlighted too (and open their thread when clicked).
-  const others = useMemo(
-    () => (group ? group.logs.filter((l) => l.reader !== reader.key && !l.role).flatMap((l) => l.responses.extras) : []),
-    [group, reader.key],
-  );
+  const others = useMemo(() => (group ? group.logs.filter((l) => l.reader !== me && !l.role).flatMap((l) => l.responses.extras) : []), [group, me]);
   const extras = useMemo(() => [...(responses?.extras ?? []), ...others], [responses?.extras, others]);
   // A comment belongs to the page it was made on; the reader may have followed links since.
   const onPage = (docId: string) => (x: Extra) => x.doc === docId && (!x.url || !pages[docId] || x.url === pages[docId]!.url);
@@ -116,7 +115,7 @@ function Guide({ request, sink, tracker }: { request: Request; sink: HttpSink | 
         f.reveal(currentItem);
       }
     }
-  }, [current, responses, frames.current.size, bump, pages]);
+  }, [current, responses, frames.current.size, bump, pages, extras]);
 
   const onFrame = useCallback(
     (docId: string, frame: DocFrame | null) => {
@@ -900,16 +899,26 @@ function CommentRow({ x, elsewhere, open, onOpen }: { x: Extra; elsewhere: boole
 // ---------------------------------------------------------------------------
 // Review groups (`?g=`): everyone's comments as threads, with replies and resolve.
 
-/** The group's threads: the members' comments as last read, with this reader's own from local state (fresher). */
+/** This reader's key as a group read names it: the server-asserted identity behind a gateway, else the reader key. */
+function useSelfKey(): string {
+  const user = useViewer((s) => s.serverUser);
+  const key = useViewer((s) => s.reader.key);
+  return user?.toLowerCase() ?? key;
+}
+
+/** The group's threads: the members' comments as last read, and this reader's own: local state (fresher)
+ *  merged with what the server holds under their key (comments made on their other devices). */
 function useThreads(): Thread[] {
   const group = useViewer((s) => s.group);
   const responses = useViewer((s) => s.responses);
-  const reader = useViewer((s) => s.reader);
+  const me = useSelfKey();
   return useMemo(() => {
     if (!group || !responses) return [];
-    const others = group.logs.filter((l) => l.role || l.reader !== reader.key);
-    return groupThreads([...others, { reader: reader.key, person: responses.reader, responses }]);
-  }, [group, responses, reader.key]);
+    const others = group.logs.filter((l) => l.role || l.reader !== me);
+    const server = group.logs.find((l) => !l.role && l.reader === me)?.responses;
+    const own = server ? mergeResponses(responses, server) : responses;
+    return groupThreads([...others, { reader: me, person: own.reader, responses: own }]);
+  }, [group, responses, me]);
 }
 
 function Discussion({ focused, onFocused }: { focused: string | null; onFocused: (id: string | null) => void }) {
@@ -931,7 +940,7 @@ function Discussion({ focused, onFocused }: { focused: string | null; onFocused:
 
 function ThreadRow({ thread, focused, onFocused }: { thread: Thread; focused: boolean; onFocused: (id: string | null) => void }) {
   const t = useT();
-  const me = useViewer((s) => s.reader.key);
+  const me = useSelfKey();
   const { addExtra, resolve } = useViewer.getState();
   const [replying, setReplying] = useState(false);
   const [text, setText] = useState('');
@@ -943,7 +952,8 @@ function ThreadRow({ thread, focused, onFocused }: { thread: Thread; focused: bo
   const resolved = !!resolution?.resolved;
   const mine = root.reader === me;
   const quote = root.extra.target.quote?.exact ?? '';
-  const who = (by: string) => (by === OWNER_KEY ? t.theOwner : by === me ? t.you : (thread.root.reader === by ? thread.root.person?.name : replies.find((r) => r.reader === by)?.person?.name) ?? by);
+  const who = (r: NonNullable<Thread['resolution']>) =>
+    r.byOwner ? t.theOwner : r.by === me ? t.you : ((thread.root.reader === r.by ? thread.root.person?.name : undefined) ?? r.by);
   const send = () => {
     const x = root.extra;
     addExtra({ doc: x.doc, target: x.target, comment: text.trim(), parent: x.id, ...(x.url ? { url: x.url } : {}) });
@@ -963,7 +973,7 @@ function ThreadRow({ thread, focused, onFocused }: { thread: Thread; focused: bo
           ))}
         </ul>
       )}
-      {resolution?.resolved && <p className="hint">{t.resolvedBy(who(resolution.by))}</p>}
+      {resolution?.resolved && <p className="hint">{t.resolvedBy(who(resolution))}</p>}
       {replying ? (
         <>
           <label className="field">
@@ -1000,6 +1010,8 @@ function ThreadText({ c, me }: { c: ThreadComment; me: string }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(c.extra.comment);
   const mine = c.reader === me;
+  // Editable here only if this device holds it (a comment made on another device is shown, not edited).
+  const editable = useViewer((s) => !!s.responses?.extras.some((x) => x.id === c.extra.id));
   const author = mine ? t.you : (c.person?.name ?? c.reader);
   if (editing)
     return (
@@ -1029,7 +1041,7 @@ function ThreadText({ c, me }: { c: ThreadComment; me: string }) {
   return (
     <p className="text">
       <strong>{author}</strong>: {c.extra.comment}{' '}
-      {mine && (
+      {editable && (
         <button className="link-btn" onClick={() => (setText(c.extra.comment), setEditing(true))}>
           {t.edit}
         </button>

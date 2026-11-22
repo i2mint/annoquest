@@ -5,7 +5,7 @@ const x = (id: string, comment: string, at: string, parent?: string): Extra => (
 let n = 0;
 const ev = (at: string, e: Record<string, unknown>) => ({ id: `e${n++}`, session: 's', seq: n, at, ...e });
 const b = (reader: string, events: unknown[], extra: Partial<EventBatch> = {}): EventBatch =>
-  ({ schema: 'annoquest/events', request: 'r1', reader, device: `dev-${reader}`, events, ...extra }) as EventBatch;
+  ({ schema: 'annoquest/events', request: 'r1', reader, device: `dev-${reader}`, events, group: 'team', ...extra }) as EventBatch;
 
 describe('review groups', () => {
   const batches = [
@@ -19,7 +19,7 @@ describe('review groups', () => {
     b('ann', [ev('2026-11-01T10:04:00Z', { type: 'extra', extra: x('a2', 'Yes, will fix', '2026-11-01T10:04:00Z', 'b1') })]),
     // Bo resolves his own comment, then the owner resolves Ann's.
     b('bo', [ev('2026-11-01T10:05:00Z', { type: 'resolve', extra: 'b2', resolved: true })]),
-    b('owner', [ev('2026-11-01T10:06:00Z', { type: 'resolve', extra: 'a1', resolved: true })], { role: 'owner', device: 'owner' }),
+    b('owner', [ev('2026-11-01T10:06:00Z', { type: 'resolve', extra: 'a1', resolved: true })], { role: 'owner', device: 'owner', group: undefined }),
   ];
 
   it('threads replies under the comment they answer, nested replies flattened', () => {
@@ -32,8 +32,8 @@ describe('review groups', () => {
 
   it('counts a resolve only from the author or the owner, the latest winning', () => {
     const [a1, b2] = groupThreads(foldBatches('r1', batches));
-    expect(a1!.resolution).toMatchObject({ resolved: true, by: OWNER_KEY });
-    expect(b2!.resolution).toMatchObject({ resolved: true, by: 'bo' });
+    expect(a1!.resolution).toMatchObject({ resolved: true, by: OWNER_KEY, byOwner: true });
+    expect(b2!.resolution).toMatchObject({ resolved: true, by: 'bo', byOwner: false });
     const withoutOwner = groupThreads(foldBatches('r1', batches.slice(0, 4)));
     expect(withoutOwner[0]!.resolution).toBeUndefined(); // Bo's resolve of Ann's comment is ignored
     const reopened = [...batches, b('ann', [ev('2026-11-01T10:07:00Z', { type: 'resolve', extra: 'a1', resolved: false })])];
@@ -44,6 +44,36 @@ describe('review groups', () => {
     const logs = foldBatches('r1', [...batches, b('owner', [ev('2026-11-01T10:08:00Z', { type: 'resolve', extra: 'b2', resolved: false })])]);
     // The reader called "owner" is not the owner: its reopen of Bo's comment does not count.
     expect(groupThreads(logs).find((t) => t.root.extra.id === 'b2')!.resolution?.resolved).toBe(true);
+  });
+
+  it('never labels a reader called owner as the owner', () => {
+    const own = [b('owner', [ev('2026-11-01T10:00:00Z', { type: 'extra', extra: x('o1', 'Mine', '2026-11-01T10:00:00Z') }), ev('2026-11-01T10:01:00Z', { type: 'resolve', extra: 'o1', resolved: true })])];
+    expect(groupThreads(foldBatches('r1', own))[0]!.resolution).toMatchObject({ resolved: true, by: OWNER_KEY, byOwner: false });
+  });
+
+  it('lets the owner win a tie with the author', () => {
+    const at = '2026-11-01T10:09:00.000Z';
+    const tie = [
+      ...batches,
+      b('ann', [ev(at, { type: 'resolve', extra: 'a1', resolved: true })]),
+      b('owner', [ev(at, { type: 'resolve', extra: 'a1', resolved: false })], { role: 'owner', device: 'owner', group: undefined }),
+    ];
+    expect(groupThreads(foldBatches('r1', tie))[0]!.resolution).toMatchObject({ resolved: false, byOwner: true });
+  });
+
+  it('keeps groups apart, and leaves readers in no group out', () => {
+    const mixed = [
+      ...batches,
+      b('cy', [ev('2026-11-01T10:10:00Z', { type: 'extra', extra: x('c1', 'Other group', '2026-11-01T10:10:00Z') })], { group: 'other' }),
+      b('dee', [ev('2026-11-01T10:11:00Z', { type: 'extra', extra: x('d1', 'No group', '2026-11-01T10:11:00Z') })], { group: undefined }),
+    ];
+    const logs = foldBatches('r1', mixed);
+    expect(groupThreads(logs, { group: 'team' }).map((t) => t.root.extra.id)).toEqual(['a1', 'b2']);
+    expect(groupThreads(logs, { group: 'other' }).map((t) => t.root.extra.id)).toEqual(['c1']);
+    const md = exportMarkdown(exportLog(mixed, { requestId: 'r1' }));
+    expect(md).toContain('## Discussion: team');
+    expect(md).toContain('## Discussion: other');
+    expect(md).not.toMatch(/Discussion[^\n]*\n[^#]*No group/);
   });
 
   it('round-trips a resolve through the viewer diff and merge', () => {

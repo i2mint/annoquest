@@ -123,11 +123,16 @@ const GROUP_REFRESH_MS = 20_000;
 
 /** Read the review group's comments now, again every so often while the page is visible, and on coming back to it. */
 function watchGroup(sink: HttpSink, name: string) {
+  let reading = false;
   const read = () => {
-    if (document.visibilityState !== 'visible') return;
-    void sink.group().then((logs) => {
-      if (logs) useViewer.getState().setGroup({ name, logs });
-    });
+    if (reading || document.visibilityState !== 'visible') return;
+    reading = true;
+    void sink
+      .group()
+      .then((logs) => {
+        if (logs) useViewer.getState().setGroup({ name, logs });
+      })
+      .finally(() => (reading = false));
   };
   useViewer.getState().setGroup({ name, logs: [] });
   read();

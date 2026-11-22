@@ -207,7 +207,7 @@ async function loadRequest(id: string): Promise<RequestData> {
 
 function RequestView({ id, reader }: { id: string; reader?: string }) {
   const got = useLoad(`request:${id}`, () => loadRequest(id));
-  const r = reader === undefined ? undefined : got.data?.log.readers.find((x) => x.reader === reader);
+  const r = reader === undefined ? undefined : got.data?.log.readers.find((x) => !x.role && x.reader === reader);
   return (
     <Status {...got}>
       {got.data && reader === undefined && <RequestPage d={got.data} reload={got.reload} />}
@@ -265,8 +265,8 @@ function RequestPage({ d, reload }: { d: RequestData; reload: () => void }) {
 
 function ReaderPage({ d, r, reload }: { d: RequestData; r: ReaderLog; reload: () => void }) {
   const { request } = d;
-  // Resolution of each of this reader's comments, as the review group sees it (author's or owner's latest).
-  const threads = groupThreads(d.log.readers);
+  // Resolution of each of this reader's comments, as their review group sees it (author's or owner's latest).
+  const threads = (r.groups ?? []).flatMap((g) => groupThreads(d.log.readers, { group: g }));
   const status = new Map(threads.map((t) => [t.root.extra.id, t.resolution]));
   const [busy, setBusy] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
@@ -322,9 +322,9 @@ function ReaderPage({ d, r, reload }: { d: RequestData; r: ReaderLog; reload: ()
                 {e.parent && 'Reply · '}
                 {pageName(e.url ?? e.doc)} · {when(e.at)}
                 {(e.rev ?? 0) > 0 && ` · edited ${plural(e.rev ?? 0, 'time')}`}
-                {status.get(e.id)?.resolved && ` · resolved by ${status.get(e.id)!.by}`}
+                {status.get(e.id)?.resolved && ` · resolved by ${status.get(e.id)!.byOwner ? 'you' : status.get(e.id)!.by}`}
               </p>
-              {!e.parent && (
+              {!e.parent && (r.groups?.length ?? 0) > 0 && (
                 <div className="actions">
                   <button disabled={busy === e.id} onClick={() => toggle(e.id, !status.get(e.id)?.resolved)}>
                     {status.get(e.id)?.resolved ? 'Reopen' : 'Resolve'}

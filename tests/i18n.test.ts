@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONTENT_INTRO, contentLink } from '../src/content';
+import { presets, resolveResponseType } from '../src/presets';
+import { presetLabels } from '../src/preset-labels';
 import { catalogues, en, fill, fr, introText, pickLang, supported } from '../viewer/i18n';
 
 describe('viewer language', () => {
@@ -68,5 +70,30 @@ describe('viewer language state', async () => {
     useViewer.getState().initLang({ param: 'en', browser: ['fr-FR'] });
     useViewer.getState().setPageLang('fr');
     expect(useViewer.getState().lang).toBe('en');
+  });
+});
+
+describe('preset labels per language (#25)', () => {
+  const item = { id: 'a', response: 'agree' } as never;
+  it('translates a built-in preset, keeping option values', () => {
+    const en = resolveResponseType(item);
+    const fr = resolveResponseType(item, undefined, { lang: 'fr' });
+    expect(fr.label).toBe("D'accord ?");
+    expect(fr.options.map((o) => o.value)).toEqual(en.options.map((o) => o.value));
+    expect(fr.options.map((o) => o.tone)).toEqual(en.options.map((o) => o.tone));
+    expect(resolveResponseType(item, undefined, { lang: 'en' })).toEqual(en);
+  });
+  it('lets item.labels and a request own responseTypes override', () => {
+    const labelled = { id: 'a', response: 'agree', labels: { agree: 'Oui' } } as never;
+    expect(resolveResponseType(labelled, undefined, { lang: 'fr' }).options[0]!.label).toBe('Oui');
+    const own = { agree: { kind: 'choice', label: 'Mine', options: [{ value: 'agree', label: 'Mine', tone: 'positive' }] } } as never;
+    expect(resolveResponseType(item, { responseTypes: own }, { lang: 'fr' }).label).toBe('Mine');
+  });
+  it('covers every option of every built-in preset in French', () => {
+    for (const [name, rt] of Object.entries(presets)) {
+      const t = presetLabels.fr?.[name];
+      expect(t, name).toBeDefined();
+      for (const o of rt.options) expect(t?.options?.[o.value], `${name}/${o.value}`).toBeTruthy();
+    }
   });
 });

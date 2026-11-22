@@ -12,6 +12,8 @@
  */
 import type { Item, Option, Request, ResponseType } from './spec';
 import { AnnoquestError } from './errors';
+import type { Lang } from './lang';
+import { presetLabels } from './preset-labels';
 
 const o = (value: string, label: string, tone: Option['tone'], extra: Partial<Option> = {}): Option => ({
   value,
@@ -111,11 +113,21 @@ export const presets: Readonly<Record<string, ResponseType>> = Object.freeze({
   label: { kind: 'choice', label: 'Label', options: [] },
 });
 
-/** The response type an item uses, with the request's custom presets and the item's labels applied. */
-export function resolveResponseType(item: Pick<Item, 'response' | 'labels' | 'id'>, request?: Pick<Request, 'responseTypes'>): ResponseType {
+/**
+ * The response type an item uses, with the request's custom presets and the item's labels applied.
+ * `lang` (default English) translates a built-in preset's labels (`preset-labels.ts`); a request's
+ * own `responseTypes` and `item.labels` override it, and option values never change.
+ */
+export function resolveResponseType(
+  item: Pick<Item, 'response' | 'labels' | 'id'>,
+  request?: Pick<Request, 'responseTypes'>,
+  { lang }: { lang?: Lang } = {},
+): ResponseType {
   let rt: ResponseType | undefined;
   if (typeof item.response === 'string') {
-    rt = request?.responseTypes?.[item.response] ?? presets[item.response];
+    const custom = request?.responseTypes?.[item.response];
+    rt = custom ?? presets[item.response];
+    if (rt && !custom && lang) rt = translated(rt, presetLabels[lang]?.[item.response]);
     if (!rt) {
       const known = [...Object.keys(request?.responseTypes ?? {}), ...Object.keys(presets)].join(', ');
       throw new AnnoquestError('invalid', `Item "${item.id}" uses response type "${item.response}", which does not exist. Known: ${known}.`);
@@ -125,6 +137,11 @@ export function resolveResponseType(item: Pick<Item, 'response' | 'labels' | 'id
   }
   if (!item.labels) return rt;
   return { ...rt, options: rt.options.map((opt) => (item.labels?.[opt.value] ? { ...opt, label: item.labels[opt.value]! } : opt)) };
+}
+
+function translated(rt: ResponseType, t: { label?: string; options?: Readonly<Record<string, string>> } | undefined): ResponseType {
+  if (!t) return rt;
+  return { ...rt, label: t.label ?? rt.label, options: rt.options.map((opt) => (t.options?.[opt.value] ? { ...opt, label: t.options[opt.value]! } : opt)) };
 }
 
 /** Whether an answer with this option needs a comment. */

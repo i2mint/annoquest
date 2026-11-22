@@ -64,12 +64,15 @@ export function linkTier(url: string): 'email' | 'chat' | 'too-long' {
 export interface RequestLinkOptions {
   /** A reader id, added as `?reader=` so a local sink can attribute answers. */
   reader?: string;
+  /** The viewer's language for this reader (`?lang=`, e.g. `fr`); else the page's `<html lang>`, else the browser's. */
+  lang?: string;
 }
 
 /** A link to `viewerUrl` carrying the request in its fragment (`#r=`). */
-export function requestLink(request: Request, viewerUrl: string, { reader }: RequestLinkOptions = {}) {
+export function requestLink(request: Request, viewerUrl: string, { reader, lang }: RequestLinkOptions = {}) {
   const u = new URL(viewerUrl);
   if (reader) u.searchParams.set('reader', reader);
+  if (lang) u.searchParams.set('lang', lang);
   // `revision` is a server's annotation, not content: a link carries the request as authored.
   const { revision: _serverSet, ...authored } = request;
   u.hash = 'r=' + encodePayload(authored);
@@ -78,10 +81,11 @@ export function requestLink(request: Request, viewerUrl: string, { reader }: Req
 }
 
 /** A link to `viewerUrl` that loads the request from a URL (`?spec=`), e.g. an annoquest server's `/api/requests/<id>`. */
-export function specLink(specUrl: string, viewerUrl: string, { reader }: RequestLinkOptions = {}) {
+export function specLink(specUrl: string, viewerUrl: string, { reader, lang }: RequestLinkOptions = {}) {
   const u = new URL(viewerUrl);
   u.searchParams.set('spec', specUrl);
   if (reader) u.searchParams.set('reader', reader);
+  if (lang) u.searchParams.set('lang', lang);
   const url = u.toString();
   return { url, length: url.length, tier: linkTier(url) };
 }

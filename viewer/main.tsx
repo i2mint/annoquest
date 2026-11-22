@@ -12,7 +12,7 @@ import { loadRequest } from './load';
 import type { DataProvider } from '@zodal/store';
 import { bindDrafts, createDrafts, guardUnload } from './drafts';
 import { defaultStore, loadLocal, makeSink, mergeResponses, saveLocal, type HttpSink, type Stored } from './persist';
-import { useViewer } from './state';
+import { messages, useViewer } from './state';
 import { createTracker, type Tracker } from './track';
 import './styles.css';
 
@@ -25,6 +25,12 @@ export interface ViewerOptions {
 export async function mountViewer(root: HTMLElement, { store = defaultStore() }: ViewerOptions = {}) {
   let sink: HttpSink | null = null;
   let tracker: Tracker | null = null;
+  // The language first, so even a failure to load is reported in the reader's language.
+  useViewer.getState().initLang({ param: new URLSearchParams(location.search).get('lang'), browser: navigator.languages ?? [navigator.language] });
+  document.documentElement.lang = useViewer.getState().lang;
+  useViewer.subscribe((s, prev) => {
+    if (s.lang !== prev.lang) document.documentElement.lang = s.lang;
+  });
   try {
     const loaded = await loadRequest();
     let request = loaded.request;
@@ -42,7 +48,7 @@ export async function mountViewer(root: HTMLElement, { store = defaultStore() }:
         // The server holds a different version under this id. From its sender, this link is
         // a new revision to preview and publish; from anyone else, it is not the request.
         if (isSender) v.setPublishable(true);
-        else throw new Error('This link does not match the request registered under its id, so answers cannot be sent. Ask its sender for a fresh link.');
+        else throw new Error(messages().linkMismatch);
       } else {
         // The id is one request with revisions: always show the latest one.
         const latest = await sink.latest();

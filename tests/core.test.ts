@@ -122,6 +122,7 @@ describe('links and baking', () => {
     const r = base();
     const link = requestLink(r, 'https://viewer.example/', { reader: 'ann' });
     expect(link.url).toContain('?reader=ann#r=');
+    expect(requestLink(r, 'https://viewer.example/', { lang: 'fr' }).url).toContain('?lang=fr#r=');
     expect(readLink(link.url).request).toEqual(r);
     expect(decodePayload(encodePayload({ a: 1 }))).toEqual({ a: 1 });
   });

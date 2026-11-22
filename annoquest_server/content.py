@@ -93,9 +93,19 @@ def is_content_request(secret: bytes, request: dict) -> bool:
     return request.get("id") == content_request_id(url, token) and not request.get("items") and len(docs) == 1 and (docs[0] or {}).get("href") == url
 
 
-def content_link(secret: bytes, url: str, *, viewer: str, reader: str | None = None) -> str:
-    """The link to send: ``viewer`` with the page, its site's token, and optionally a reader id."""
+#: Languages the viewer has a catalogue for (the TypeScript ``LANGS`` in ``src/lang.ts``; a test keeps them equal).
+VIEWER_LANGS = ("en", "fr")
+
+
+def content_link(secret: bytes, url: str, *, viewer: str, reader: str | None = None, lang: str | None = None) -> str:
+    """The link to send: ``viewer`` with the page, its site's token, and optionally a reader id and
+    the viewer's language (``lang``, e.g. ``"fr"``; without it the viewer follows the page's
+    ``<html lang>``, then the reader's browser). An unsupported ``lang`` raises ``ValueError``."""
+    if lang and lang.strip().lower().replace("_", "-").split("-")[0] not in VIEWER_LANGS:
+        raise ValueError(f"lang {lang!r}: the viewer speaks {', '.join(VIEWER_LANGS)}")
     params = {"content": url, "t": site_token(secret, url)}
     if reader:
         params["reader"] = reader
+    if lang:
+        params["lang"] = lang
     return f"{viewer}{'&' if '?' in viewer else '?'}{urlencode(params)}"

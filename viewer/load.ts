@@ -8,6 +8,7 @@ import { contentRequest } from '../src/content';
 import { decodePayload } from '../src/link';
 import { parseRequest } from '../src/request';
 import type { Request } from '../src/spec';
+import { messages } from './state';
 
 export type Origin = 'baked' | 'fragment' | 'spec' | 'content';
 
@@ -34,16 +35,16 @@ export async function loadRequest(loc: Location = location, doc: Document = docu
   const spec = params.get('spec');
   if (spec) {
     const res = await fetch(spec, { headers: { Accept: 'application/json' }, credentials: 'same-origin' });
-    if (res.status === 401) throw new Error('You need to sign in to open this request. Reload the page to sign in.');
-    if (res.status === 403) throw new Error('This request was not sent to you.');
-    if (!res.ok) throw new Error(`The request could not be loaded (${res.status}).`);
+    if (res.status === 401) throw new Error(messages().needSignIn);
+    if (res.status === 403) throw new Error(messages().notSentToYou);
+    if (!res.ok) throw new Error(messages().loadFailed(res.status));
     return { request: parseRequest(await res.json()), origin: 'spec', reader };
   }
   const content = params.get('content');
   if (content) {
     const token = params.get('t');
-    if (!token) throw new Error('This link is missing its key (the t= part). Ask for the link again.');
+    if (!token) throw new Error(messages().missingKey);
     return { request: await contentRequest({ url: content, token, api: apiBase(doc), viewer: loc.href }), origin: 'content', reader };
   }
-  throw new Error('This page has no request in it. Open the link you were sent.');
+  throw new Error(messages().noRequest);
 }

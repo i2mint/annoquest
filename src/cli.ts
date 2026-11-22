@@ -15,6 +15,7 @@ import { bakeRequest, inlineDocuments } from './bake';
 import { parseResponses, summarize, summaryMarkdown } from './collect';
 import { toElicitation } from './elicit';
 import { AnnoquestError } from './errors';
+import { LANGS, supported } from './lang';
 import { readLink, requestLink, specLink } from './link';
 import { presets } from './presets';
 import { renderRequest } from './render';
@@ -30,7 +31,7 @@ const HELP = `annoquest — guided annotation requests
                                                          resolve every item's passage; exit 1 if any fails
   annoquest bake <request.json> [--out page.html] [--doc id=path|url]... [--inline] [--no-check]
                                                          one self-contained HTML page (viewer + request [+ snapshots])
-  annoquest link <request.json> --viewer <url> [--reader id] [--spec-url url]
+  annoquest link <request.json> --viewer <url> [--reader id] [--lang fr] [--spec-url url]
                                                          a link carrying the request (#r=) or pointing at it (?spec=)
   annoquest collect <file|dir|reply-link>... --request <request.json> [--format json|markdown]
                                                          summarise responses (saved documents or event logs):
@@ -150,6 +151,7 @@ async function main(argv: string[]): Promise<number> {
       'no-check': { type: 'boolean' },
       viewer: { type: 'string' },
       reader: { type: 'string' },
+      lang: { type: 'string' },
       'spec-url': { type: 'string' },
       request: { type: 'string' },
       format: { type: 'string' },
@@ -201,7 +203,8 @@ async function main(argv: string[]): Promise<number> {
     case 'link': {
       const { request } = requestAt(positionals[0]);
       if (!values.viewer) throw new AnnoquestError('invalid', '`annoquest link` needs --viewer <url> (where the viewer is served).');
-      const opts = { reader: values.reader };
+      if (values.lang && !supported(values.lang)) throw new AnnoquestError('invalid', `--lang ${values.lang}: the viewer speaks ${LANGS.join(', ')}.`);
+      const opts = { reader: values.reader, lang: values.lang };
       out(values['spec-url'] ? specLink(values['spec-url'], values.viewer, opts) : requestLink(request, values.viewer, opts));
       return 0;
     }

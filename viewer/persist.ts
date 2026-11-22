@@ -16,6 +16,7 @@ import { mergeResponses } from '../src/collect';
 import { foldBatches, parseBatches } from '../src/events';
 import { newId } from '../src/request';
 import type { Event, EventBatch, EventInput, Person, Request, Responses } from '../src/spec';
+import { messages } from './state';
 
 export { mergeResponses };
 
@@ -178,7 +179,7 @@ export function createHttpSink(
       }
       if (res.status === 404) return retry({ kind: 'waiting' }); // not registered yet: keep trying, slowly
       if (res.status >= 400 && res.status < 500) {
-        onState({ kind: 'error', message: `Your answers are saved here, but the server refused them (${json?.detail ?? res.status}).` });
+        onState({ kind: 'error', message: messages().serverRefused(String(json?.detail ?? res.status)) });
         return;
       }
       if (!res.ok) throw new Error(`The server answered ${res.status}.`);

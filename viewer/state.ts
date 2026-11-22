@@ -8,6 +8,7 @@ import { PRIORITIES, type Answer, type Extra, type Item, type Mode, type Priorit
 import { resolveResponseType } from '../src/presets';
 import { itemHash } from '../src/request';
 import type { SinkState } from './persist';
+import { catalogues, DEFAULT_LANG, pickLang, type Lang, type Messages } from './i18n';
 
 export type View = 'intro' | 'item' | 'pause' | 'done';
 
@@ -30,6 +31,14 @@ export interface ViewerState {
   seen: Record<string, string | undefined>;
   /** The page each document's frame shows now (the reader may have followed links): original address and title. */
   pages: Record<string, { url: string; title?: string } | undefined>;
+  /** The language the viewer speaks (see `i18n.ts` for how it is picked). */
+  lang: Lang;
+  /** What it was picked from: the link's `lang=` and the browser's languages; the page's comes later, when it loads. */
+  langFrom: { param?: string | null; browser: string[] };
+  /** Pick the language from the link and the browser (at start). */
+  initLang(from: { param?: string | null; browser: readonly string[] }): void;
+  /** The annotated page loaded: its `<html lang>` now counts (below the link's, above the browser's). */
+  setPageLang(page: string | null | undefined): void;
   init(p: { request: Request; reader: Partial<Reader> & { key: string }; responses: Responses }): void;
   fail(message: string): void;
   setServerUser(user: string | null): void;
@@ -66,6 +75,14 @@ export const useViewer = create<ViewerState>()(
     publishable: false,
     seen: {},
     pages: {},
+    lang: DEFAULT_LANG,
+    langFrom: { browser: [] },
+    initLang: (from) =>
+      set((s) => {
+        s.langFrom = { param: from.param, browser: [...from.browser] };
+        s.lang = pickLang(from);
+      }),
+    setPageLang: (page) => set((s) => void (s.lang = pickLang({ ...s.langFrom, page }))),
     init: ({ request, reader, responses }) =>
       set((s) => {
         s.request = request;
@@ -177,3 +194,9 @@ export function tiers(items: Item[], r: Responses | null) {
 }
 
 export const modeOf = (request: Request, reader: Partial<Reader>): Mode => reader.mode ?? request.mode;
+
+/** The current language's messages, outside React (errors thrown while loading, for instance). */
+export const messages = (): Messages => catalogues[useViewer.getState().lang];
+
+/** The current language's messages, in a component (re-renders when the language changes). */
+export const useT = (): Messages => catalogues[useViewer((s) => s.lang)];

@@ -82,6 +82,8 @@ def test_content_link(tmp_path):
     secret = load_secret(tmp_path)
     link = content_link(secret, PAGE, viewer="https://site.test/annoquest/", reader="ann")
     assert link.startswith("https://site.test/annoquest/?content=https%3A%2F%2Fexample.org") and "&reader=ann" in link
+    assert "lang=" not in link
+    assert content_link(secret, PAGE, viewer="https://site.test/annoquest/", lang="fr").endswith("&lang=fr")
     assert is_content_request(secret, content_request(secret))
     forged = {**content_request(secret), "items": [{"id": "a", "prompt": "?"}]}
     assert not is_content_request(secret, forged)

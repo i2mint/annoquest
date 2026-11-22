@@ -35,7 +35,7 @@ annoquest check request.json --doc main=./page.html --write   # record passage h
 Then one of:
 
 - `annoquest bake request.json --inline --out review.html` — one file, nothing else needed; the reader's answers stay in their browser and they send back a reply link.
-- `annoquest link request.json --viewer <viewer url> [--reader id]` — the request rides in the link (keep under ~2000 characters for email; `tier` says).
+- `annoquest link request.json --viewer <viewer url> [--reader id] [--lang fr]` — the request rides in the link (keep under ~2000 characters for email; `tier` says).
 - A request with `"sink": {"kind": "http", "url": "/api"}` served by an annoquest server — answers autosubmit, identity comes from the gateway. Link: `<server>/#r=…` (from `annoquest link`), or `<server>/?spec=/api/requests/<id>` once the request is registered.
 
 With a server, the sender must open the link once before it goes out (that registers it; only the sender can). Never send the link yourself unless you were asked to: hand it to the person who asked.
@@ -64,11 +64,12 @@ Worst first: blocked (someone said no; read their reason), to discuss, waiting (
 No items to write: one link opens a page (and the pages it links to on the same site) for the reader to highlight and comment on. Every comment, edit and page view is sent as it happens; the reader has nothing to submit, and the instructions they see say so (including that page views and time are recorded).
 
 ```bash
-ssh <server> python -m annoquest_server link <page url> --viewer <server viewer url> [--reader <id>]   # prints the link
+ssh <server> python -m annoquest_server link <page url> --viewer <server viewer url> [--reader <id>] [--lang fr]   # prints the link
 ssh <server> python -m annoquest_server events <request id> > events.json     # later: everything sent (the owner page, if the server has one, shows the same)
 annoquest export events.json --format markdown                                # each reader's comments (page, passage, occurrence, comment) and time per page
 ```
 
+- `--lang fr` makes the viewer's own words French for that link (default: the page's `<html lang>`, else the reader's browser; English and French exist). Write your own request text in the readers' language: it is shown as written.
 - `--reader` (or `&user_id=` in the link) names the reader; without it each browser gets its own random id. Make one link per person when you need to tell people apart.
 - The request id is in the export and in the server's `events/` folder (`c-…`); `annoquest collect` also reads event logs, so a guided request with a server sink is collected the same way.
 - A page on the viewer's own site is shown live, with its scripts (single-page apps work). Any other site goes through the server's proxy, without scripts: pages that only render with JavaScript show only what the server sends.

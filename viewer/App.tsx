@@ -15,9 +15,8 @@ import type { HttpSink } from './persist';
 import { publishRevision } from '../src/remote';
 import { itemHash } from '../src/request';
 import { drafts, type DraftValue } from './drafts';
-import { answered, modeOf, queue, tiers, useViewer, type ViewerState } from './state';
-
-const TIER_LABEL = { must: 'Most important', should: 'Important', could: 'If you have time' } as const;
+import { answered, modeOf, queue, tiers, useT, useViewer, type ViewerState } from './state';
+import { fill, introText } from './i18n';
 const TONE_CLASS: Record<Option['tone'], string> = { positive: 'tone-pos', neutral: 'tone-neu', attention: 'tone-att', blocking: 'tone-blk' };
 
 // ---------------------------------------------------------------------------
@@ -25,8 +24,9 @@ const TONE_CLASS: Record<Option['tone'], string> = { positive: 'tone-pos', neutr
 export function App({ sink, tracker = null }: { sink: HttpSink | null; tracker?: Tracker | null }) {
   const request = useViewer((s) => s.request);
   const error = useViewer((s) => s.error);
-  if (error) return <Notice title="This request could not be opened" body={error} />;
-  if (!request) return <Notice title="Loading…" body="" busy />;
+  const t = useT();
+  if (error) return <Notice title={t.cannotOpen} body={error} />;
+  if (!request) return <Notice title={t.loading} body="" busy />;
   return <Guide request={request} sink={sink} tracker={tracker} />;
 }
 
@@ -48,6 +48,7 @@ function Guide({ request, sink, tracker }: { request: Request; sink: HttpSink | 
   const current = useViewer((s) => s.current);
   const pages = useViewer((s) => s.pages);
   const { go, setView, setSeen } = useViewer.getState();
+  const t = useT();
   const items = useMemo(() => queue(request, reader.id), [request, reader.id]);
   /** No items: a freeform request (the reader highlights and comments on anything). */
   const freeform = items.length === 0;
@@ -157,7 +158,7 @@ function Guide({ request, sink, tracker }: { request: Request; sink: HttpSink | 
   );
   return (
     <div className={`layout${freeform ? ' freeform' : ''}`}>
-      <section className="doc-pane" aria-label="Document">
+      <section className="doc-pane" aria-label={t.documentLabel}>
         {request.documents.length > 1 && (
           <div className="doc-tabs" role="tablist">
             {request.documents.map((d) => (
@@ -168,10 +169,10 @@ function Guide({ request, sink, tracker }: { request: Request; sink: HttpSink | 
           </div>
         )}
         {request.documents.map((d) => (
-          <DocView key={d.id} doc={d} hidden={d.id !== shownDoc} onFrame={onFrame} onRefresh={onRefresh} tracker={tracker} />
+          <DocView key={d.id} doc={d} hidden={d.id !== shownDoc} onFrame={onFrame} onRefresh={onRefresh} tracker={tracker} isFirstDoc={d.id === request.documents[0]!.id} />
         ))}
       </section>
-      <aside className="panel" aria-label="Guide">
+      <aside className="panel" aria-label={t.guideLabel}>
         <Header request={request} sink={sink} />
         {!freeform && <Progress items={items} />}
         {freeform ? (
@@ -203,7 +204,7 @@ function Guide({ request, sink, tracker }: { request: Request; sink: HttpSink | 
           {view !== 'intro' && request.allowExtra && <Comments docs={request.documents} focused={focused} onFocused={setFocused} />}
           {view !== 'intro' && view !== 'done' && (
             <button className="link-btn finish" onClick={() => setView('done')}>
-              Finish for now
+              {t.finishForNow}
             </button>
           )}
         </div>
@@ -259,9 +260,10 @@ function pageOf(doc: Doc, d: Document): { url: string; title?: string } {
   return { url, title: d.title?.trim() || undefined };
 }
 
-function DocView({ doc, hidden, onFrame, onRefresh, tracker }: { doc: Doc; hidden: boolean; onFrame: (id: string, f: DocFrame | null) => void; onRefresh: (id: string) => void; tracker: Tracker | null }) {
+function DocView({ doc, hidden, onFrame, onRefresh, tracker, isFirstDoc }: { doc: Doc; hidden: boolean; onFrame: (id: string, f: DocFrame | null) => void; onRefresh: (id: string) => void; tracker: Tracker | null; isFirstDoc: boolean }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const report = (d: Document) => useViewer.getState().setPage(doc.id, pageOf(doc, d));
+  const t = useT();
   const inline = doc.source.kind === 'inline' ? doc.source : null;
   // A live document runs its own scripts (url sources only, never a snapshot: see DocumentSource).
   const live = doc.source.kind === 'url' && doc.source.scripts === true;
@@ -308,6 +310,8 @@ function DocView({ doc, hidden, onFrame, onRefresh, tracker }: { doc: Doc; hidde
       attached.current = surface.doc;
       const frame = new DocFrame(surface);
       report(surface.doc);
+      // The page's own language counts for the viewer's (below the link's lang=): the first document's.
+      if (isFirstDoc) useViewer.getState().setPageLang(surface.doc.documentElement.lang);
       tracker?.watch(surface.doc);
       // An app's own routes (#/…) are pages too; the document stays, so say when the route changes.
       const onRoute = () => report(surface.doc);
@@ -326,15 +330,13 @@ function DocView({ doc, hidden, onFrame, onRefresh, tracker }: { doc: Doc; hidde
       }
     }
   };
-  if (mode === 'shadow' && inline) return <ShadowDocView doc={doc} html={inline.html} baseUrl={inline.baseUrl} hidden={hidden} onFrame={onFrame} />;
+  if (mode === 'shadow' && inline) return <ShadowDocView doc={doc} html={inline.html} baseUrl={inline.baseUrl} hidden={hidden} onFrame={onFrame} isFirstDoc={isFirstDoc} />;
   const src = doc.source.kind === 'url' ? doc.source.url : undefined;
   const srcDoc = inline ? withBase(inline.html, inline.baseUrl) : undefined;
   return (
     <div className="doc-view" hidden={hidden}>
       {mode === 'detached' && (
-        <p className="doc-detached">
-          This document is on another site, so passages can't be highlighted here. Each item shows its passage, with a link to it in the original.
-        </p>
+        <p className="doc-detached">{t.detachedOtherSite}</p>
       )}
       <iframe ref={ref} title={doc.title ?? doc.id} src={src} srcDoc={srcDoc} onLoad={onLoad} sandbox={live ? 'allow-same-origin allow-scripts allow-popups allow-popups-to-escape-sandbox' : 'allow-same-origin allow-popups allow-popups-to-escape-sandbox'} />
     </div>
@@ -342,13 +344,15 @@ function DocView({ doc, hidden, onFrame, onRefresh, tracker }: { doc: Doc; hidde
 }
 
 /** An inline document rendered into a shadow root of the viewer itself (see shadowdoc.ts). */
-function ShadowDocView({ doc, html, baseUrl, hidden, onFrame }: { doc: Doc; html: string; baseUrl?: string; hidden: boolean; onFrame: (id: string, f: DocFrame | null) => void }) {
+function ShadowDocView({ doc, html, baseUrl, hidden, onFrame, isFirstDoc }: { doc: Doc; html: string; baseUrl?: string; hidden: boolean; onFrame: (id: string, f: DocFrame | null) => void; isFirstDoc: boolean }) {
+  const t = useT();
   const scroller = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     try {
       const { shadow, body } = mountShadowDocument(host.current!, html, { baseUrl });
+      if (isFirstDoc) useViewer.getState().setPageLang(/<html\b[^>]*\blang\s*=\s*["']?([\w-]+)/i.exec(html)?.[1]);
       onFrame(doc.id, new DocFrame(shadowSurface(shadow, body, scroller.current!, doc.id)));
       useViewer.getState().setPage(doc.id, { url: doc.href ?? `#${doc.id}` });
     } catch (e) {
@@ -360,7 +364,7 @@ function ShadowDocView({ doc, html, baseUrl, hidden, onFrame }: { doc: Doc; html
   if (failed)
     return (
       <div className="doc-view" hidden={hidden}>
-        <p className="doc-detached">This document cannot be shown here. Each item shows its passage.</p>
+        <p className="doc-detached">{t.cannotShow}</p>
       </div>
     );
   return (
@@ -386,34 +390,36 @@ function Header({ request, sink }: { request: Request; sink: HttpSink | null }) 
   const localSaved = useViewer((x) => x.localSaved);
   const user = useViewer((x) => x.serverUser);
   const reader = useViewer((x) => x.reader);
+  const lang = useViewer((x) => x.lang);
+  const t = useT();
   let status: { text: string; cls: string; action?: { label: string; run: () => void } };
-  if (s.kind === 'local') status = localSaved ? { text: 'Saved on this device', cls: 'ok' } : { text: "Couldn't save on this device — use “Download” when done", cls: 'bad' };
-  else if (s.kind === 'saving') status = { text: 'Saving…', cls: 'busy' };
-  else if (s.kind === 'pending') status = { text: 'Saved on this device · sending shortly', cls: 'busy' };
-  else if (s.kind === 'waiting') status = { text: "Saved on this device · will send once the sender has opened this request", cls: 'warn' };
-  else if (s.kind === 'sent') status = { text: s.at ? `Saved · sent ${new Date(s.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Up to date', cls: 'ok' };
-  else if (s.kind === 'offline') status = { text: 'Saved on this device · will send when back online', cls: 'warn', action: { label: 'Retry', run: () => void sink?.flush() } };
-  else if (s.kind === 'auth') status = { text: 'Saved on this device · sign in again to send', cls: 'warn', action: { label: 'Sign in', run: () => location.reload() } };
+  if (s.kind === 'local') status = localSaved ? { text: t.savedOnDevice, cls: 'ok' } : { text: t.cannotSaveOnDevice, cls: 'bad' };
+  else if (s.kind === 'saving') status = { text: t.saving, cls: 'busy' };
+  else if (s.kind === 'pending') status = { text: t.sendingShortly, cls: 'busy' };
+  else if (s.kind === 'waiting') status = { text: t.waitingForSender, cls: 'warn' };
+  else if (s.kind === 'sent') status = { text: s.at ? t.sentAt(new Date(s.at).toLocaleTimeString(lang, { hour: '2-digit', minute: '2-digit' })) : t.upToDate, cls: 'ok' };
+  else if (s.kind === 'offline') status = { text: t.offline, cls: 'warn', action: { label: t.retry, run: () => void sink?.flush() } };
+  else if (s.kind === 'auth') status = { text: t.signInAgain, cls: 'warn', action: { label: t.signIn, run: () => location.reload() } };
   else status = { text: s.message, cls: 'bad' };
   const preview = useViewer((x) => x.preview);
   const publishable = useViewer((x) => x.publishable);
   const [publishing, setPublishing] = useState<'idle' | 'busy' | string>('idle');
-  if (preview) status = { text: 'Preview: you sent this request, so nothing you click here is sent', cls: 'busy' };
+  if (preview) status = { text: t.previewNotice, cls: 'busy' };
   if (preview && publishable && request.sink.kind === 'http') {
     const api = request.sink.url;
     status =
       publishing === 'busy'
-        ? { text: 'Publishing…', cls: 'busy' }
+        ? { text: t.publishing, cls: 'busy' }
         : {
-            text: publishing === 'idle' ? 'Preview of a new version, not published yet. Readers still see the current one.' : publishing,
+            text: publishing === 'idle' ? t.previewNewVersion : publishing,
             cls: 'warn',
             action: {
-              label: 'Publish as a new revision',
+              label: t.publishRevision,
               run: () => {
                 setPublishing('busy');
                 publishRevision(request, { api })
                   .then(() => location.replace(`${location.pathname}?spec=${encodeURIComponent(`${api.replace(/\/$/, '')}/requests/${request.id}`)}`))
-                  .catch((e: Error) => setPublishing(`Not published: ${e.message}`));
+                  .catch((e: Error) => setPublishing(t.notPublished(e.message)));
               },
             },
           };
@@ -423,9 +429,9 @@ function Header({ request, sink }: { request: Request; sink: HttpSink | null }) 
     <header className="panel-head">
       <h1>{request.title}</h1>
       <p className="meta">
-        {request.requester?.name && <>From {request.requester.name}</>}
-        {who && <> · answering as {who}</>}
-        {request.due && <> · by {request.due}</>}
+        {request.requester?.name && t.from(request.requester.name)}
+        {who && t.answeringAs(who)}
+        {request.due && t.dueBy(request.due)}
       </p>
       <p className={`save save-${status.cls}`} role="status" aria-live="polite">
         {status.text}
@@ -442,14 +448,15 @@ function Header({ request, sink }: { request: Request; sink: HttpSink | null }) 
 function Progress({ items }: { items: Item[] }) {
   const responses = useViewer((s) => s.responses);
   const ts = tiers(items, responses);
+  const t = useT();
   return (
-    <div className="progress" aria-label="Progress">
-      {ts.map((t) => (
-        <div key={t.priority} className={`tier-progress p-${t.priority}`}>
-          <span>{TIER_LABEL[t.priority]}</span>
-          <meter min={0} max={t.items.length} value={t.done} />
+    <div className="progress" aria-label={t.progressLabel}>
+      {ts.map((tier) => (
+        <div key={tier.priority} className={`tier-progress p-${tier.priority}`}>
+          <span>{t.tier[tier.priority]}</span>
+          <meter min={0} max={tier.items.length} value={tier.done} />
           <span className="count">
-            {t.done}/{t.items.length}
+            {tier.done}/{tier.items.length}
           </span>
         </div>
       ))}
@@ -464,47 +471,47 @@ function Intro({ request, items, onStart }: { request: Request; items: Item[]; o
   const { setName } = useViewer.getState();
   const ts = tiers(items, responses);
   const needName = !reader.name && !user && !reader.id;
+  const t = useT();
   return (
     <div className="intro">
-      {(request.intro ?? '').split(/\n\s*\n/).filter(Boolean).map((p, i) => (
+      {(introText(request.intro, t) ?? '').split(/\n\s*\n/).filter(Boolean).map((p, i) => (
         <p key={i}>
           <Linked text={p} />
         </p>
       ))}
       <ul className="tier-summary">
-        {ts.map((t) => (
-          <li key={t.priority}>
-            <strong>{TIER_LABEL[t.priority]}</strong>: {t.items.length} item{t.items.length > 1 ? 's' : ''}
-            {t.minutes ? ` · about ${Math.round(t.minutes)} min` : ''}
+        {ts.map((tier) => (
+          <li key={tier.priority}>
+            <strong>{t.tier[tier.priority]}</strong>: {t.itemCount(tier.items.length)}
+            {tier.minutes ? t.aboutMinutes(Math.round(tier.minutes)) : ''}
           </li>
         ))}
       </ul>
-      <p className="hint">Start with the most important ones; you can stop at any point. Every answer is saved as you give it{request.sink.kind === 'http' ? ' and sent automatically' : ''}.</p>
+      <p className="hint">{t.startHint(request.sink.kind === 'http')}</p>
       {needName && (
         <label className="field">
-          Your name (so your answers can be told apart)
-          <input defaultValue={responses?.reader.name ?? ''} onBlur={(e) => setName(e.target.value.trim())} placeholder="Optional" />
+          {t.yourNameForAnswers}
+          <input defaultValue={responses?.reader.name ?? ''} onBlur={(e) => setName(e.target.value.trim())} placeholder={t.optional} />
         </label>
       )}
       <button className="primary" onClick={onStart}>
-        {Object.keys(responses?.answers ?? {}).length ? 'Continue' : 'Start'}
+        {Object.keys(responses?.answers ?? {}).length ? t.continue : t.start}
       </button>
     </div>
   );
 }
 
 function Pause({ next, onGo, onStop }: { next: Item; onGo: () => void; onStop: () => void }) {
+  const t = useT();
   return (
     <div className="pause">
-      <h2>That tier is done. Thank you.</h2>
-      <p>
-        Next up: <strong>{TIER_LABEL[next.priority].toLowerCase()}</strong> items. Keep going, or stop here; your answers are saved.
-      </p>
+      <h2>{t.tierDone}</h2>
+      <p>{fill(t.nextUp, { tier: <strong key="tier">{t.tierInline[next.priority]}</strong> })}</p>
       <div className="row">
         <button className="primary" onClick={onGo}>
-          Keep going
+          {t.keepGoing}
         </button>
-        <button onClick={onStop}>Stop here</button>
+        <button onClick={onStop}>{t.stopHere}</button>
       </div>
     </div>
   );
@@ -516,6 +523,7 @@ function ItemCard(p: { request: Request; item: Item; anchored: Anchored | null; 
   const { request, item, anchored, doc } = p;
   const a = useViewer((s) => s.responses?.answers[item.id]);
   const { answer } = useViewer.getState();
+  const t = useT();
   const rt = resolveResponseType(item, request);
   const chosen = ([] as string[]).concat(a?.value === true ? [rt.options[0]?.value ?? 'read'] : (a?.value ?? []));
   const chosenOpts = rt.options.filter((o) => chosen.includes(o.value));
@@ -539,12 +547,10 @@ function ItemCard(p: { request: Request; item: Item; anchored: Anchored | null; 
   return (
     <article className={`card p-${item.priority}`} aria-labelledby={`t-${item.id}`}>
       <p className="where">
-        <span className={`badge p-${item.priority}`}>{TIER_LABEL[item.priority]}</span>
-        <span className="pos">
-          {p.index + 1} of {p.total}
-        </span>
+        <span className={`badge p-${item.priority}`}>{t.tier[item.priority]}</span>
+        <span className="pos">{t.position(p.index + 1, p.total)}</span>
         {anchored?.sectionLabel && <span className="sec">§ {anchored.sectionLabel}</span>}
-        {item.minutes && <span className="mins">~{item.minutes} min</span>}
+        {item.minutes && <span className="mins">{t.minutes(item.minutes)}</span>}
       </p>
       {item.title && <h2 id={`t-${item.id}`}>{item.title}</h2>}
       {passage && (
@@ -552,38 +558,38 @@ function ItemCard(p: { request: Request; item: Item; anchored: Anchored | null; 
           {anchored?.how === 'section' ? passage.slice(0, 280) + (passage.length > 280 ? '…' : '') : passage}
         </blockquote>
       )}
-      {anchored?.how === 'missing' && <p className="warn-text">This passage is no longer in the document as written; it may have been edited. The text above is what was asked about.</p>}
+      {anchored?.how === 'missing' && <p className="warn-text">{t.passageMissing}</p>}
       {anchored === null && href && item.target?.quote && (
         <p>
           <a href={textFragmentUrl(href, item.target.quote)} target="_blank" rel="noreferrer">
-            Open this passage in the original ↗
+            {t.openPassage}
           </a>
         </p>
       )}
       <p className="prompt" id={item.title ? undefined : `t-${item.id}`}>
         <Linked text={item.prompt} />
       </p>
-      {stale && <p className="warn-text">The passage changed after you answered; please check your answer still holds.</p>}
-      {updated && <p className="warn-text">This item was updated since you last answered it; please check your answer still holds.</p>}
+      {stale && <p className="warn-text">{t.passageChanged}</p>}
+      {updated && <p className="warn-text">{t.itemUpdated}</p>}
       <Controls rt={rt} chosen={chosen} onPick={pick} />
       {item.comment !== 'none' && (
         <label className="field">
-          {rt.kind === 'text' ? 'Your comment' : needComment ? 'Comment (please say why)' : 'Comment (optional)'}
+          {rt.kind === 'text' ? t.yourComment : needComment ? t.commentWhy : t.commentOptional}
           <textarea
             value={a?.comment ?? ''}
             onChange={(e) => answer(item.id, { comment: e.target.value })}
             rows={needComment || encouraged || rt.kind === 'text' ? 4 : 2}
-            placeholder={needComment ? 'A sentence is enough' : encouraged ? 'Optional, but it helps' : ''}
+            placeholder={needComment ? t.aSentenceIsEnough : encouraged ? t.optionalButHelps : ''}
           />
-          {needComment && !a?.comment?.trim() && <span className="hint">A short reason helps the requester act on this.</span>}
+          {needComment && !a?.comment?.trim() && <span className="hint">{t.shortReasonHelps}</span>}
         </label>
       )}
       <div className="row nav">
         <button onClick={p.onBack} disabled={p.index === 0}>
-          Back
+          {t.back}
         </button>
         <button className="primary" onClick={p.onNext}>
-          {answered(useViewer.getState().responses, item.id) ? 'Next' : 'Skip for now'}
+          {answered(useViewer.getState().responses, item.id) ? t.next : t.skipForNow}
         </button>
       </div>
     </article>
@@ -591,9 +597,10 @@ function ItemCard(p: { request: Request; item: Item; anchored: Anchored | null; 
 }
 
 function Controls({ rt, chosen, onPick }: { rt: ResponseType; chosen: string[]; onPick: (o: Option) => void }) {
+  const t = useT();
   if (rt.kind === 'text') return null;
   if (rt.kind === 'ack') {
-    const o = rt.options[0] ?? { value: 'read', label: "I've read this", tone: 'positive' as const };
+    const o = rt.options[0] ?? { value: 'read', label: t.readAck, tone: 'positive' as const };
     const on = chosen.length > 0;
     return (
       <button className={`ack ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => onPick(o)}>
@@ -605,7 +612,7 @@ function Controls({ rt, chosen, onPick }: { rt: ResponseType; chosen: string[]; 
     );
   }
   return (
-    <div className="options" role={rt.kind === 'choice' ? 'radiogroup' : 'group'} aria-label={rt.label ?? 'Answer'}>
+    <div className="options" role={rt.kind === 'choice' ? 'radiogroup' : 'group'} aria-label={rt.label ?? t.answerLabel}>
       {rt.options.map((o) => {
         const on = chosen.includes(o.value);
         return (
@@ -627,20 +634,21 @@ function ItemList({ items, request, mode }: { items: Item[]; request: Request; m
   const { go } = useViewer.getState();
   const ts = tiers(items, responses);
   const currentTier = items.find((i) => i.id === current)?.priority ?? ts[0]?.priority;
+  const t = useT();
   return (
-    <nav className="item-list" aria-label="All items">
-      {ts.map((t) => (
-        <details key={t.priority} open={mode === 'checklist' || t.priority === currentTier}>
+    <nav className="item-list" aria-label={t.allItemsLabel}>
+      {ts.map((tier) => (
+        <details key={tier.priority} open={mode === 'checklist' || tier.priority === currentTier}>
           <summary>
-            {TIER_LABEL[t.priority]} <span className="count">{t.items.length - t.done ? `${t.items.length - t.done} to go` : 'all done'}</span>
+            {t.tier[tier.priority]} <span className="count">{tier.items.length - tier.done ? t.toGo(tier.items.length - tier.done) : t.allDone}</span>
           </summary>
           <ol>
-            {t.items.map((i) => {
+            {tier.items.map((i) => {
               const tone = toneOf(i, request, responses);
               return (
                 <li key={i.id}>
                   <button className={`row-btn ${i.id === current ? 'cur' : ''}`} onClick={() => go(i.id)} aria-current={i.id === current ? 'step' : undefined}>
-                    <span className={`state ${tone ? TONE_CLASS[tone] : ''} ${answered(responses, i.id) ? 'done' : ''}`} aria-label={answered(responses, i.id) ? 'answered' : 'not answered'} />
+                    <span className={`state ${tone ? TONE_CLASS[tone] : ''} ${answered(responses, i.id) ? 'done' : ''}`} aria-label={answered(responses, i.id) ? t.answered : t.notAnswered} />
                     <span className="label">{i.title ?? i.prompt}</span>
                   </button>
                 </li>
@@ -669,6 +677,7 @@ function SelectionBox({ selection, url, restored, onDone }: { selection: { doc: 
   const [text, setText] = useState(restored ?? '');
   const [open, setOpen] = useState(!!restored);
   const { addExtra } = useViewer.getState();
+  const t = useT();
   // Keep what is typed, as it is typed; it is cleared when the comment is saved or cancelled.
   useEffect(() => {
     drafts()?.set('new', open && text.trim() ? { kind: 'new', doc: selection.doc, target: selection.target, text: selection.text, ...(url ? { url } : {}), comment: text } : null);
@@ -681,20 +690,20 @@ function SelectionBox({ selection, url, restored, onDone }: { selection: { doc: 
     return (
       <div className="selection">
         <p>
-          Selected: “{selection.text.slice(0, 80)}
+          {t.selected} “{selection.text.slice(0, 80)}
           {selection.text.length > 80 ? '…' : ''}”
         </p>
-        <button onClick={() => setOpen(true)}>Comment on this</button>
+        <button onClick={() => setOpen(true)}>{t.commentOnThis}</button>
       </div>
     );
   return (
     <div className="selection">
       <p>“{selection.text.slice(0, 160)}”</p>
       <label className="field">
-        Your comment
+        {t.yourComment}
         <textarea autoFocus rows={3} value={text} onChange={(e) => setText(e.target.value)} />
       </label>
-      {text.trim() && <p className="hint draft">Not saved yet{restored && text === restored ? ' (restored after a reload)' : ''}.</p>}
+      {text.trim() && <p className="hint draft">{t.notSavedYet}{restored && text === restored ? t.restoredAfterReload : ''}.</p>}
       <div className="row">
         <button
           className="primary"
@@ -704,9 +713,9 @@ function SelectionBox({ selection, url, restored, onDone }: { selection: { doc: 
             done();
           }}
         >
-          Save comment
+          {t.saveComment}
         </button>
-        <button onClick={done}>Cancel</button>
+        <button onClick={done}>{t.cancel}</button>
       </div>
     </div>
   );
@@ -717,6 +726,7 @@ function Done({ request, items, sink }: { request: Request; items: Item[]; sink:
   const s = useViewer((x) => x.sink);
   const { finish } = useViewer.getState();
   const [copied, setCopied] = useState(false);
+  const t = useT();
   const n = items.filter((i) => answered(responses, i.id)).length;
   const left = items.length - n;
   useEffect(() => {
@@ -734,13 +744,13 @@ function Done({ request, items, sink }: { request: Request; items: Item[]; sink:
   };
   return (
     <div className="done">
-      <h2>{left ? `${n} of ${items.length} answered` : 'All done. Thank you.'}</h2>
-      {left > 0 && <p>You can come back to the {left} remaining item{left > 1 ? 's' : ''} any time from this page; your answers are kept.</p>}
+      <h2>{left ? t.nOfTotalAnswered(n, items.length) : t.allDoneThanks}</h2>
+      {left > 0 && <p>{t.comeBack(left)}</p>}
       {request.sink.kind === 'http' ? (
-        <p>{s.kind === 'sent' ? 'Your answers have been sent. Nothing else to do.' : 'Your answers are saved here and will be sent as soon as possible.'}</p>
+        <p>{s.kind === 'sent' ? t.answersSent : t.answersWillSend}</p>
       ) : (
         <>
-          <p>Your answers are saved in this browser. To send them back, share this reply link with {request.requester?.name ?? 'the requester'}:</p>
+          <p>{t.shareReplyLink(request.requester?.name ?? t.theRequester)}</p>
           <div className="row">
             <button
               className="primary"
@@ -749,14 +759,14 @@ function Done({ request, items, sink }: { request: Request; items: Item[]; sink:
                 setCopied(true);
               }}
             >
-              {copied ? 'Copied ✓' : 'Copy reply link'}
+              {copied ? t.copied : t.copyReplyLink}
             </button>
             {request.requester?.email && link && link.tier === 'email' && (
-              <a className="btn" href={`mailto:${request.requester.email}?subject=${encodeURIComponent('Re: ' + request.title)}&body=${encodeURIComponent(link.url)}`}>
-                Email it
+              <a className="btn" href={`mailto:${request.requester.email}?subject=${encodeURIComponent(t.replySubject(request.title))}&body=${encodeURIComponent(link.url)}`}>
+                {t.emailIt}
               </a>
             )}
-            <button onClick={download}>Download</button>
+            <button onClick={download}>{t.download}</button>
           </div>
         </>
       )}
@@ -773,20 +783,21 @@ function Freeform({ request }: { request: Request }) {
   const user = useViewer((s) => s.serverUser);
   const { setName } = useViewer.getState();
   const needName = !reader.name && !user && !reader.id;
+  const t = useT();
   return (
     <div className="intro">
-      {(request.intro ?? 'Select any passage in the page to comment on it.').split(/\n\s*\n/).filter(Boolean).map((p, i) => (
+      {(introText(request.intro, t) ?? t.freeformDefaultIntro).split(/\n\s*\n/).filter(Boolean).map((p, i) => (
         <p key={i}>
           <Linked text={p} />
         </p>
       ))}
       {needName && (
         <label className="field">
-          Your name (optional, so your comments can be told apart)
-          <input defaultValue={responses?.reader.name ?? ''} onBlur={(e) => setName(e.target.value.trim())} placeholder="Optional" />
+          {t.yourNameForComments}
+          <input defaultValue={responses?.reader.name ?? ''} onBlur={(e) => setName(e.target.value.trim())} placeholder={t.optional} />
         </label>
       )}
-      {!responses?.extras.length && <p className="hint">Select some text in the page, then “Comment on this”.</p>}
+      {!responses?.extras.length && <p className="hint">{t.selectHint}</p>}
     </div>
   );
 }
@@ -795,13 +806,14 @@ function Freeform({ request }: { request: Request }) {
 function Comments({ docs, focused, onFocused }: { docs: Doc[]; focused: string | null; onFocused: (id: string | null) => void }) {
   const extras = useViewer((s) => s.responses?.extras ?? []);
   const pages = useViewer((s) => s.pages);
+  const t = useT();
   if (!extras.length) return null;
   const here = (x: Extra) => !x.url || x.url === pages[x.doc]?.url;
   const sorted = [...extras].sort((a, b) => Number(here(b)) - Number(here(a)) || (a.at < b.at ? -1 : 1));
   const multi = docs.length > 1 || extras.some((x) => !here(x));
   return (
-    <section className="comments" aria-label="Your comments">
-      <h3>Your comments ({extras.length})</h3>
+    <section className="comments" aria-label={t.yourCommentsLabel}>
+      <h3>{t.yourComments(extras.length)}</h3>
       <ul>
         {sorted.map((x) => (
           <CommentRow key={x.id} x={x} elsewhere={multi && !here(x)} open={focused === x.id} onOpen={(on) => onFocused(on ? x.id : null)} />
@@ -813,6 +825,7 @@ function Comments({ docs, focused, onFocused }: { docs: Doc[]; focused: string |
 
 function CommentRow({ x, elsewhere, open, onOpen }: { x: Extra; elsewhere: boolean; open: boolean; onOpen: (on: boolean) => void }) {
   const { editExtra, removeExtra } = useViewer.getState();
+  const t = useT();
   const kept = useRef(((): string | undefined => {
     const d = open ? drafts()?.get(`edit:${x.id}`) : undefined;
     return d?.kind === 'edit' ? d.comment : undefined;
@@ -838,14 +851,14 @@ function CommentRow({ x, elsewhere, open, onOpen }: { x: Extra; elsewhere: boole
   return (
     <li ref={ref} className={`comment${open ? ' open' : ''}`}>
       <p className="quote">“{quote.slice(0, 140)}{quote.length > 140 ? '…' : ''}”</p>
-      {elsewhere && <p className="hint page">On {x.url?.replace(/^https?:\/\//, '')}</p>}
+      {elsewhere && <p className="hint page">{t.onPage(x.url?.replace(/^https?:\/\//, '') ?? '')}</p>}
       {open ? (
         <>
           <label className="field">
-            Your comment
+            {t.yourComment}
             <textarea autoFocus rows={3} value={text} onChange={(e) => setText(e.target.value)} />
           </label>
-          {text !== x.comment && text.trim() && <p className="hint draft">Not saved yet.</p>}
+          {text !== x.comment && text.trim() && <p className="hint draft">{t.notSavedYet}.</p>}
           <div className="row">
             <button
               className="primary"
@@ -855,11 +868,11 @@ function CommentRow({ x, elsewhere, open, onOpen }: { x: Extra; elsewhere: boole
                 onOpen(false);
               }}
             >
-              Save
+              {t.save}
             </button>
-            <button onClick={() => onOpen(false)}>Cancel</button>
+            <button onClick={() => onOpen(false)}>{t.cancel}</button>
             <button className="link-btn danger" onClick={() => removeExtra(x.id)}>
-              Delete
+              {t.delete}
             </button>
           </div>
         </>
@@ -867,7 +880,7 @@ function CommentRow({ x, elsewhere, open, onOpen }: { x: Extra; elsewhere: boole
         <p className="text">
           {x.comment}{' '}
           <button className="link-btn" onClick={() => onOpen(true)}>
-            edit
+            {t.edit}
           </button>
         </p>
       )}

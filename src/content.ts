@@ -25,9 +25,12 @@ export async function contentRequestId(url: string, token: string): Promise<stri
   return `c-${toBase64Url(new Uint8Array(digest)).slice(0, 22)}`;
 }
 
-/** The link to send for a page: the viewer with the page, its site's token and optionally a reader (as the server's `content_link`). */
-export function contentLink(viewer: string, url: string, token: string, { reader }: { reader?: string } = {}): string {
-  const q = new URLSearchParams({ content: url, t: token, ...(reader ? { reader } : {}) });
+/**
+ * The link to send for a page: the viewer with the page, its site's token, and optionally a reader
+ * and the viewer's language (`lang`, e.g. `fr`), as the server's `content_link`.
+ */
+export function contentLink(viewer: string, url: string, token: string, { reader, lang }: { reader?: string; lang?: string } = {}): string {
+  const q = new URLSearchParams({ content: url, t: token, ...(reader ? { reader } : {}), ...(lang ? { lang } : {}) });
   return `${viewer}${viewer.includes('?') ? '&' : '?'}${q}`;
 }
 

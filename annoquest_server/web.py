@@ -50,7 +50,7 @@ MAX_EVENTS_BYTES = 256 * 1024
 #: Posts kept per device and request: about two days of continuous reading; bounds what a stranger can store.
 MAX_EVENT_FILES = 20_000
 #: For documents served at /doc/: no script, still same-origin (so the viewer can read the frame).
-DOC_CSP = "sandbox allow-same-origin allow-popups; default-src 'self' data:; style-src 'self' 'unsafe-inline' https:; img-src * data:; font-src * data:"
+DOC_CSP = "sandbox allow-same-origin allow-popups allow-popups-to-escape-sandbox; default-src 'self' data:; style-src 'self' 'unsafe-inline' https:; img-src * data:; font-src * data:"
 
 _HERE = Path(__file__).resolve().parent
 #: Where the built viewer is looked for: the deployed ref first, then a local build.
@@ -86,6 +86,8 @@ def mk_app(
     public: bool | None = None,
     api_prefix: str = "/api",
     fetch=safe_fetch,
+    record_client: bool | None = None,
+    trust_forwarded_for: bool = False,
 ) -> Starlette:
     """Make the app.
 
@@ -103,13 +105,28 @@ def mk_app(
     :param api_prefix: where the API lives in this app (default ``/api``; ``""`` when the
         platform already mounts the app under an API path, as enlace does at ``/api/<app>``).
     :param fetch: how the proxy gets a page (``proxy.safe_fetch``; tests pass a fake).
+    :param record_client: store ``client_ip`` and ``user_agent`` on each event batch, next to
+        ``by`` and ``receivedAt`` (default: ``$ANNOQUEST_RECORD_CLIENT``; off). Never taken from
+        the client's body. A host that enables it should say so on the page that sends events.
+    :param trust_forwarded_for: take the IP from the first ``X-Forwarded-For`` address (only when
+        the app runs behind a proxy you trust, which overwrites that header); else the socket peer.
     """
     header = identity_header or os.environ.get("ANNOQUEST_IDENTITY_HEADER") or None
     owner_set = {o.strip().lower() for o in (owners if owners is not None else os.environ.get("ANNOQUEST_OWNERS", "").split(",")) if o.strip()}
     store = Store(Path(data_dir) if data_dir else default_data_dir())
     public = (os.environ.get("ANNOQUEST_PUBLIC", "").lower() in ("1", "true", "yes")) if public is None else public
     public = bool(public) and not header and not dev_user
+    record_client = (os.environ.get("ANNOQUEST_RECORD_CLIENT", "").lower() in ("1", "true", "yes")) if record_client is None else record_client
     api = api_prefix.rstrip("/")
+
+    def client_details(req: Request) -> dict:
+        if not record_client:
+            return {}
+        ip = req.client.host if req.client else None
+        if trust_forwarded_for:
+            ip = (req.headers.get("x-forwarded-for") or "").split(",")[0].strip() or ip
+        details = {"client_ip": ip, "user_agent": req.headers.get("user-agent")}
+        return {k: v for k, v in details.items() if v}
     _secret: list[bytes] = []
 
     def secret() -> bytes:
@@ -307,7 +324,9 @@ def mk_app(
             return _err(400, "The body is not an annoquest event batch for this request.")
         if store.event_files(rid, data["device"]) >= MAX_EVENT_FILES:
             return _err(429, "This device has sent as much as this server keeps for one request.")
-        name = store.add_events(rid, {k: v for k, v in data.items() if k not in ("by", "receivedAt")}, by=user)
+        name = store.add_events(
+            rid, {k: v for k, v in data.items() if k not in ("by", "receivedAt", "client_ip", "user_agent")}, by=user, client=client_details(req)
+        )
         return JSONResponse({"saved": name}, status_code=201)
 
     async def events_mine(req: Request):

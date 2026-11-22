@@ -62,3 +62,36 @@ def test_public_app_still_has_no_owner_routes(apps):
     public, _, _ = apps
     assert public.get("/requests").status_code == 404
     assert public.post("/links", json={"url": PAGE}).status_code == 404
+
+
+def _sent_batches(tmp_path, **app_kw):
+    data = tmp_path / "data"
+    public = TestClient(mk_app(public=True, api_prefix="", data_dir=data, viewer=tmp_path / "none.html", **app_kw))
+    owner = TestClient(mk_owner_app(data_dir=data, viewer_url=VIEWER, api_prefix=""))
+    req = content_request(load_secret(data))
+    rid = req["id"]
+    public.put(f"/requests/{rid}", json=req)
+    forged = {**batch(rid, [ev(1, "open")]), "client_ip": "6.6.6.6", "user_agent": "forged"}
+    assert public.post(f"/requests/{rid}/events", json=forged, headers={"User-Agent": "UA/1", "X-Forwarded-For": "9.9.9.9, 10.0.0.1"}).status_code == 201
+    return owner.get(f"/requests/{rid}/events").json()["batches"]
+
+
+def test_client_details_off_by_default_and_never_from_the_body(tmp_path):
+    (b,) = _sent_batches(tmp_path)
+    assert "client_ip" not in b and "user_agent" not in b
+
+
+def test_record_client_stores_peer_and_user_agent(tmp_path):
+    (b,) = _sent_batches(tmp_path, record_client=True)
+    assert b["user_agent"] == "UA/1" and b["client_ip"] == "testclient"
+
+
+def test_record_client_behind_a_trusted_proxy_uses_forwarded_for(tmp_path):
+    (b,) = _sent_batches(tmp_path, record_client=True, trust_forwarded_for=True)
+    assert b["client_ip"] == "9.9.9.9"
+
+
+def test_doc_csp_has_the_popup_escape_flag_like_the_iframe():
+    from annoquest_server.web import DOC_CSP
+
+    assert "allow-popups-to-escape-sandbox" in DOC_CSP

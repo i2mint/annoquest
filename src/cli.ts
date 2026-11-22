@@ -17,6 +17,7 @@ import { toElicitation } from './elicit';
 import { AnnoquestError } from './errors';
 import { readLink, requestLink, specLink } from './link';
 import { presets } from './presets';
+import { renderRequest } from './render';
 import { checkRequest, createRequest, diffRequests, parseRequest, type CreateInput } from './request';
 import { exportLog, exportMarkdown, foldBatches, isBatch, parseBatches } from './events';
 import { publishRevision } from './remote';
@@ -43,6 +44,8 @@ const HELP = `annoquest — guided annotation requests
                                                          a new revision under the same id: the diff, and a link whose
                                                          preview its sender publishes (or --api to publish directly)
   annoquest diff <before.json> <after.json>              what a revision changes: items added, removed, changed
+  annoquest render <request.json> [--format markdown|text] [--link url]
+                                                         a read-only view of the request: items by priority, with answer options
   annoquest elicit <request.json> <item-id>               one item as an MCP elicitation schema
   annoquest presets                                      the built-in response types
   annoquest schema [request|responses]                   JSON Schema of the spec
@@ -150,6 +153,7 @@ async function main(argv: string[]): Promise<number> {
       'spec-url': { type: 'string' },
       request: { type: 'string' },
       format: { type: 'string' },
+      link: { type: 'string' },
       json: { type: 'boolean' },
       against: { type: 'string' },
       api: { type: 'string' },
@@ -231,6 +235,13 @@ async function main(argv: string[]): Promise<number> {
         writeFileSync(values.out, page);
         out({ ok: true, out: values.out, bytes: page.length, api: values.api ?? '/api' });
       } else out(page);
+      return 0;
+    }
+    case 'render': {
+      if (!positionals[0]) throw new AnnoquestError('invalid', '`annoquest render` needs a request file.');
+      const format = values.format ?? 'markdown';
+      if (format !== 'markdown' && format !== 'text') throw new AnnoquestError('invalid', '--format is markdown or text.');
+      out(renderRequest(parseRequest(readJson(positionals[0])), { format, link: values.link }));
       return 0;
     }
     case 'diff': {

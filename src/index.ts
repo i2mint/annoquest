@@ -35,6 +35,7 @@ export { createRequest, parseRequest, checkRequest, checkItem, newId, docOf, ite
 export { encodePayload, decodePayload, requestLink, specLink, replyLink, readLink, linkTier } from './link';
 export { bakeRequest, inlineDocuments, scriptSafeJson, REQUEST_SCRIPT_ID } from './bake';
 export { parseResponses, mergeResponses, latestPerReader, readerKey, summarize, summaryMarkdown, type Summary, type ItemSummary, type ItemStatus } from './collect';
+export { renderRequest, type RenderFormat } from './render';
 export { toElicitation, type Elicitation } from './elicit';
 export { publishRevision, type RemoteOptions } from './remote';
 export { foldResponses, foldBatches, analytics, diffResponses, parseBatches, isBatch, batchReader, exportLog, exportMarkdown, DWELL_CAP_MS, BEAT_MS, type Analytics, type PageStats, type ReaderLog, type Export } from './events';

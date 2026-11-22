@@ -276,3 +276,33 @@ describe('revisions', () => {
     await expect(publishRevision(v1(), { api: '/api', fetch: refused })).rejects.toThrow(/Only the sender/);
   });
 });
+
+describe('renderRequest', () => {
+  const req = createRequest({
+    title: 'Review',
+    intro: 'Please read.',
+    documents: [{ id: 'd', source: { kind: 'inline', html: '<h1 id="s">x</h1><p>Hello world</p>' } }],
+    items: [
+      { id: 'a', title: 'First', prompt: 'Is it right?', priority: 'must', target: { section: 's' } },
+      { id: 'b', prompt: 'Any thoughts?', priority: 'could', response: { kind: 'text', options: [], label: 'your thoughts' } },
+    ],
+  });
+
+  it('groups items by priority with answers and sections', async () => {
+    const { renderRequest } = await import('../src/index');
+    const md = renderRequest(req, { link: 'https://x/y' });
+    expect(md).toContain('# Review');
+    expect(md).toContain('Live request: https://x/y');
+    expect(md.indexOf('## Must (1)')).toBeLessThan(md.indexOf('## Could (1)'));
+    expect(md).toContain('**1. First**');
+    expect(md).toContain('Doc section: `#s`');
+    expect(md).toContain('Answer: your thoughts');
+  });
+
+  it('plain text has no markdown marks', async () => {
+    const { renderRequest } = await import('../src/index');
+    const t = renderRequest(req, { format: 'text' });
+    expect(t).not.toMatch(/[*`>]/);
+    expect(t).toContain('1. First');
+  });
+});

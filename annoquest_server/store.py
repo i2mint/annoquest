@@ -222,10 +222,11 @@ class Store:
         d = self._device_dir(request_id, device)
         return sum(1 for _ in d.glob("*.json")) if d.is_dir() else 0
 
-    def add_events(self, request_id: str, batch: dict, *, by: str | None) -> str:
-        """Append one batch (as sent, plus who the server says sent it); returns its file name."""
+    def add_events(self, request_id: str, batch: dict, *, by: str | None, client: dict | None = None) -> str:
+        """Append one batch (as sent, plus who the server says sent it and, when given, its
+        ``client`` details such as ``client_ip``/``user_agent``); returns its file name."""
         name = f"{_stamp()}.json"
-        _write_once(self._device_dir(request_id, batch["device"]) / name, {**batch, **({"by": by} if by else {}), "receivedAt": _now()})
+        _write_once(self._device_dir(request_id, batch["device"]) / name, {**batch, **({"by": by} if by else {}), **(client or {}), "receivedAt": _now()})
         return name
 
     def _batches(self, d: Path) -> Iterator[dict]:

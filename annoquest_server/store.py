@@ -84,7 +84,12 @@ def merge_responses(saves: list[dict]) -> dict | None:
     return out
 
 
-EVENT_TYPES = {"open", "view", "visibility", "beat", "answer", "extra", "remove", "name", "finish"}
+EVENT_TYPES = {"open", "view", "visibility", "beat", "answer", "extra", "remove", "resolve", "name", "finish"}
+
+#: What a review group's members read of each other (``GET .../groups/<group>``): comments, never reading times.
+GROUP_EVENT_TYPES = {"extra", "remove", "resolve", "name"}
+#: Group names: short and plain, as they ride in links.
+GROUP_NAME_MAX = 64
 
 
 def well_formed_batch(batch: object, *, max_events: int = 500) -> bool:
@@ -96,6 +101,7 @@ def well_formed_batch(batch: object, *, max_events: int = 500) -> bool:
         all(isinstance(batch.get(k), str) and batch.get(k) for k in ("request", "reader", "device"))
         and len(batch["reader"]) <= 254
         and len(batch["device"]) <= 64
+        and (batch.get("group") is None or (isinstance(batch["group"], str) and 0 < len(batch["group"]) <= GROUP_NAME_MAX))
         and isinstance(events, list)
         and 0 < len(events) <= max_events
         and all(
@@ -243,6 +249,20 @@ class Store:
         base = self.root / "events" / request_id
         out = [b for d in (sorted(base.iterdir()) if base.is_dir() else []) for b in self._batches(d)]
         return [b for b in out if b.get("by") == by] if by is not None else out
+
+    def group_events(self, request_id: str, group: str) -> list[dict]:
+        """What a review group reads: the batches sent through the group's links, and the owner's,
+        reduced to their comment events (``GROUP_EVENT_TYPES``) and to the fields the fold needs.
+        No reading times, no client details."""
+        keep = ("schema", "request", "reader", "device", "person", "group", "role")
+        out = []
+        for b in self.events(request_id):
+            if b.get("group") != group and b.get("role") != "owner":
+                continue
+            events = [e for e in b.get("events") or [] if isinstance(e, dict) and e.get("type") in GROUP_EVENT_TYPES]
+            if events:
+                out.append({**{k: b[k] for k in keep if k in b}, "events": events})
+        return out
 
     def request_ids(self) -> list[str]:
         """Every registered request's id."""

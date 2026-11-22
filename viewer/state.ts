@@ -4,6 +4,7 @@
  */
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
+import type { ReaderLog } from '../src/events';
 import { PRIORITIES, type Answer, type Extra, type Item, type Mode, type Priority, type Reader, type Request, type Responses } from '../src/spec';
 import { resolveResponseType } from '../src/presets';
 import { itemHash } from '../src/request';
@@ -31,6 +32,11 @@ export interface ViewerState {
   seen: Record<string, string | undefined>;
   /** The page each document's frame shows now (the reader may have followed links): original address and title. */
   pages: Record<string, { url: string; title?: string } | undefined>;
+  /** In a review group (`?g=`): the group's name, and every member's comments as last read from the server. */
+  group: { name: string; logs: ReaderLog[] } | null;
+  setGroup(group: { name: string; logs: ReaderLog[] } | null): void;
+  /** Mark a comment (own, or in a review group another reader's) resolved or open again. */
+  resolve(extraId: string, resolved: boolean): void;
   /** The language the viewer speaks (see `i18n.ts` for how it is picked). */
   lang: Lang;
   /** What it was picked from: the link's `lang=` and the browser's languages; the page's comes later, when it loads. */
@@ -76,6 +82,15 @@ export const useViewer = create<ViewerState>()(
     publishable: false,
     seen: {},
     pages: {},
+    group: null,
+    setGroup: (group) => set((s) => void (s.group = group as typeof s.group)),
+    resolve: (extraId, resolved) =>
+      set((s) => {
+        if (!s.responses) return;
+        const at = now();
+        s.responses.resolutions = { ...(s.responses.resolutions ?? {}), [extraId]: { resolved, at } };
+        s.responses.updatedAt = at;
+      }),
     lang: DEFAULT_LANG,
     langFrom: { browser: [] },
     initLang: (from) =>

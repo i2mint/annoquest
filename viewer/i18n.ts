@@ -138,6 +138,19 @@ export const en = {
   save: 'Save',
   delete: 'Delete',
   edit: 'edit',
+  // Review groups
+  discussion: (n: number) => `Discussion (${n})`,
+  discussionLabel: 'Discussion',
+  groupHint: 'Everyone with a link of this review group sees these comments, and can reply.',
+  you: 'You',
+  theOwner: 'The owner',
+  reply: 'Reply',
+  yourReply: 'Your reply',
+  sendReply: 'Send reply',
+  resolve: 'Resolve',
+  reopen: 'Reopen',
+  resolvedBy: (who: string) => `Resolved by ${who}`,
+  replies: (n: number) => `${n} ${plural(n, 'reply', 'replies')}`,
 };
 
 export type Messages = typeof en;
@@ -243,6 +256,18 @@ export const fr: Messages = {
   save: 'Enregistrer',
   delete: 'Supprimer',
   edit: 'modifier',
+  discussion: (n) => `Discussion (${n})`,
+  discussionLabel: 'Discussion',
+  groupHint: 'Toutes les personnes qui ont un lien de ce groupe de relecture voient ces commentaires et peuvent y répondre.',
+  you: 'Vous',
+  theOwner: 'Le responsable',
+  reply: 'Répondre',
+  yourReply: 'Votre réponse',
+  sendReply: 'Envoyer la réponse',
+  resolve: 'Marquer comme traité',
+  reopen: 'Rouvrir',
+  resolvedBy: (who) => `Traité par ${who}`,
+  replies: (n) => `${n} ${plural(n, 'réponse', 'réponses')}`,
 };
 
 /** Every catalogue, by language (the list is `LANGS` in `src/lang.ts`; a missing one fails the type check). */

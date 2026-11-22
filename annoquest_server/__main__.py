@@ -1,6 +1,6 @@
 """The server owner's commands, run where the data directory is (e.g. ``ssh <host> python -m annoquest_server …``).
 
-    python -m annoquest_server link <url> [--reader ID] [--lang fr] [--viewer URL]   a content link for any page
+    python -m annoquest_server link <url> [--reader ID] [--lang fr] [--group NAME] [--viewer URL]   a content link for any page
     python -m annoquest_server put-request <request.json>                register a request (write-once)
     python -m annoquest_server events <request id>                       its event batches, as JSON (for `annoquest export`)
 
@@ -32,6 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     lk = sub.add_parser("link", help="a content link for a page (its site's token included)")
     lk.add_argument("url")
     lk.add_argument("--reader", default=None, help="the reader's id (else each browser gets its own)")
+    lk.add_argument("--group", default=None, help="a review group: its links' readers see, answer and resolve each other's comments")
     lk.add_argument("--lang", default=None, help="the viewer's language for this link, e.g. fr (else the page's, then the browser's)")
     lk.add_argument("--viewer", default=os.environ.get("ANNOQUEST_VIEWER_URL", ""), help="where the viewer is served (default: $ANNOQUEST_VIEWER_URL)")
     pr = sub.add_parser("put-request", help="register a request (a file, or - for stdin)")
@@ -47,10 +48,10 @@ def main(argv: list[str] | None = None) -> int:
         if not a.viewer:
             p.error("say where the viewer is: --viewer https://example.org/annoquest/ (or set ANNOQUEST_VIEWER_URL)")
         try:
-            link = content_link(load_secret(root), a.url, viewer=a.viewer, reader=a.reader, lang=a.lang)
+            link = content_link(load_secret(root), a.url, viewer=a.viewer, reader=a.reader, lang=a.lang, group=a.group)
         except ValueError as e:
             p.error(str(e))
-        _out({"link": link, "content": a.url, "reader": a.reader, "lang": a.lang})
+        _out({"link": link, "content": a.url, "reader": a.reader, "lang": a.lang, "group": a.group})
         return 0
     if a.cmd == "put-request":
         data = json.loads(sys.stdin.read() if a.file == "-" else Path(a.file).read_text(encoding="utf-8"))

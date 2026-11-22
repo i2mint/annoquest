@@ -36,11 +36,13 @@ The document on the left with every asked-about passage highlighted, a guide on 
 With the server adapter running, its owner makes a link for any page:
 
 ```bash
-python -m annoquest_server link https://example.org/essay.html --viewer https://your.site/annoquest/ [--reader ann] [--lang fr]
+python -m annoquest_server link https://example.org/essay.html --viewer https://your.site/annoquest/ [--reader ann] [--lang fr] [--group team]
 # → https://your.site/annoquest/?content=https%3A%2F%2Fexample.org%2Fessay.html&t=…&reader=ann
 ```
 
 The reader sees the page with a side panel: the instructions (there is nothing to save or submit; reading is recorded), their comments, editable. They select text and comment; they can follow the page's links (on the same site) and comment there too. Without `reader=` (alias `user_id=`), each browser gets a random id of its own.
+
+With `--group team`, every link made for that group shares one discussion: its readers see each other's comments (never their reading times), reply to them, and resolve their own; the owner resolves any of them from the owner page. Without a group, each reader sees only their own comments.
 
 The viewer speaks English or French (more languages are one catalogue each, in `viewer/i18n.ts`). It takes the link's `lang=` (`--lang fr`), else the page's `<html lang>`, else the reader's browser languages. Only its own words are translated: what you wrote in a request is shown as written, except the content link's default instructions, which are also the notice that reading is recorded and are shown in the reader's language with the same meaning.
 

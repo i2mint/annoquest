@@ -64,11 +64,12 @@ Worst first: blocked (someone said no; read their reason), to discuss, waiting (
 No items to write: one link opens a page (and the pages it links to on the same site) for the reader to highlight and comment on. Every comment, edit and page view is sent as it happens; the reader has nothing to submit, and the instructions they see say so (including that page views and time are recorded).
 
 ```bash
-ssh <server> python -m annoquest_server link <page url> --viewer <server viewer url> [--reader <id>] [--lang fr]   # prints the link
+ssh <server> python -m annoquest_server link <page url> --viewer <server viewer url> [--reader <id>] [--lang fr] [--group <name>]   # prints the link
 ssh <server> python -m annoquest_server events <request id> > events.json     # later: everything sent (the owner page, if the server has one, shows the same)
 annoquest export events.json --format markdown                                # each reader's comments (page, passage, occurrence, comment) and time per page
 ```
 
+- `--group <name>` puts the link in a review group: make one link per reader with the same group, and they see, reply to and resolve each other's comments. Leave it out when readers should not see each other's comments.
 - `--lang fr` makes the viewer's own words French for that link (default: the page's `<html lang>`, else the reader's browser; English and French exist). Write your own request text in the readers' language: it is shown as written.
 - `--reader` (or `&user_id=` in the link) names the reader; without it each browser gets its own random id. Make one link per person when you need to tell people apart.
 - The request id is in the export and in the server's `events/` folder (`c-…`); `annoquest collect` also reads event logs, so a guided request with a server sink is collected the same way.

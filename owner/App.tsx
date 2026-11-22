@@ -4,7 +4,7 @@
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { contentLink } from '../src/content';
-import { exportLog, exportMarkdown, type Export, type ReaderLog } from '../src/events';
+import { exportLog, exportMarkdown, groupThreads, type Export, type ReaderLog } from '../src/events';
 import type { Request } from '../src/spec';
 import { api, type RequestSummary } from './api';
 import { navigate, parseRoute, useHash } from './route';
@@ -152,12 +152,13 @@ function RequestCard({ r }: { r: RequestSummary }) {
 function MakeLink() {
   const [url, setUrl] = useState('');
   const [reader, setReader] = useState('');
+  const [group, setGroup] = useState('');
   const [state, setState] = useState<{ link?: string; error?: string; busy?: boolean }>({});
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setState({ busy: true });
     try {
-      setState({ link: await api.link(url.trim(), reader.trim()) });
+      setState({ link: await api.link(url.trim(), reader.trim(), group.trim()) });
     } catch (err) {
       setState({ error: (err as Error).message });
     }
@@ -173,6 +174,10 @@ function MakeLink() {
         <label>
           Reader <span className="muted">(optional; else each browser gets its own id)</span>
           <input value={reader} onChange={(e) => setReader(e.target.value)} autoCapitalize="off" autoCorrect="off" />
+        </label>
+        <label>
+          Review group <span className="muted">(optional; readers of one group see and answer each other's comments)</span>
+          <input value={group} onChange={(e) => setGroup(e.target.value)} autoCapitalize="off" autoCorrect="off" maxLength={64} />
         </label>
         <button className="primary" disabled={state.busy || !url.trim()}>
           {state.busy ? 'Making…' : 'Make link'}
@@ -206,7 +211,7 @@ function RequestView({ id, reader }: { id: string; reader?: string }) {
   return (
     <Status {...got}>
       {got.data && reader === undefined && <RequestPage d={got.data} reload={got.reload} />}
-      {got.data && reader !== undefined && (r ? <ReaderPage d={got.data} r={r} /> : <p className="error">No reader {reader} in this request.</p>)}
+      {got.data && reader !== undefined && (r ? <ReaderPage d={got.data} r={r} reload={got.reload} /> : <p className="error">No reader {reader} in this request.</p>)}
     </Status>
   );
 }
@@ -215,7 +220,8 @@ function RequestPage({ d, reload }: { d: RequestData; reload: () => void }) {
   const { request, log } = d;
   const c = request.content;
   const base = `annoquest-${request.id}`;
-  const readers = [...log.readers].sort((a, b) => (b.analytics.lastAt ?? '').localeCompare(a.analytics.lastAt ?? ''));
+  // The owner's own resolves are folded as a reader of their own; they are not a reader here.
+  const readers = log.readers.filter((r) => !r.role).sort((a, b) => (b.analytics.lastAt ?? '').localeCompare(a.analytics.lastAt ?? ''));
   return (
     <>
       <section>
@@ -234,8 +240,8 @@ function RequestPage({ d, reload }: { d: RequestData; reload: () => void }) {
         {d.rejected > 0 && <p className="muted small">{plural(d.rejected, 'stored batch', 'stored batches')} could not be read and are left out.</p>}
       </section>
       <section>
-        <h2>{plural(log.readers.length, 'reader')}</h2>
-        {log.readers.length === 0 && <p className="muted">Nobody has opened it yet.</p>}
+        <h2>{plural(readers.length, 'reader')}</h2>
+        {readers.length === 0 && <p className="muted">Nobody has opened it yet.</p>}
         <ul className="cards">
           {readers.map((r) => (
             <li key={r.reader}>
@@ -257,8 +263,22 @@ function RequestPage({ d, reload }: { d: RequestData; reload: () => void }) {
   );
 }
 
-function ReaderPage({ d, r }: { d: RequestData; r: ReaderLog }) {
+function ReaderPage({ d, r, reload }: { d: RequestData; r: ReaderLog; reload: () => void }) {
   const { request } = d;
+  // Resolution of each of this reader's comments, as the review group sees it (author's or owner's latest).
+  const threads = groupThreads(d.log.readers);
+  const status = new Map(threads.map((t) => [t.root.extra.id, t.resolution]));
+  const [busy, setBusy] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const toggle = (extra: string, resolved: boolean) => {
+    setBusy(extra);
+    setFailed(null);
+    api
+      .resolve(request.id, extra, resolved)
+      .then(reload)
+      .catch((e: Error) => setFailed(e.message))
+      .finally(() => setBusy(null));
+  };
   const a = r.analytics;
   const one: Export = { ...d.log, readers: [r] };
   const answers = Object.entries(r.responses.answers);
@@ -284,6 +304,11 @@ function ReaderPage({ d, r }: { d: RequestData; r: ReaderLog }) {
       </section>
       <section>
         <h2>{plural(r.responses.extras.length, 'comment')}</h2>
+        {failed && (
+          <p className="error" role="alert">
+            {failed}
+          </p>
+        )}
         <ul className="comments">
           {r.responses.extras.map((e) => (
             <li key={e.id}>
@@ -294,9 +319,18 @@ function ReaderPage({ d, r }: { d: RequestData; r: ReaderLog }) {
               )}
               <p>{e.comment || <span className="muted">(no comment)</span>}</p>
               <p className="muted small">
+                {e.parent && 'Reply · '}
                 {pageName(e.url ?? e.doc)} · {when(e.at)}
                 {(e.rev ?? 0) > 0 && ` · edited ${plural(e.rev ?? 0, 'time')}`}
+                {status.get(e.id)?.resolved && ` · resolved by ${status.get(e.id)!.by}`}
               </p>
+              {!e.parent && (
+                <div className="actions">
+                  <button disabled={busy === e.id} onClick={() => toggle(e.id, !status.get(e.id)?.resolved)}>
+                    {status.get(e.id)?.resolved ? 'Reopen' : 'Resolve'}
+                  </button>
+                </div>
+              )}
             </li>
           ))}
         </ul>

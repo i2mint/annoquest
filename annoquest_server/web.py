@@ -37,7 +37,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from .content import is_content_request, load_secret, token_allows
+from .content import group_allows, is_content_request, load_secret, token_allows
 from .proxy import PROXY_HEADERS, ProxyRefused, decode, notice_page, proxy_link, rewrite, safe_fetch
 from .store import Store, valid_id, well_formed, well_formed_batch
 
@@ -324,10 +324,25 @@ def mk_app(
             return _err(400, "The body is not an annoquest event batch for this request.")
         if store.event_files(rid, data["device"]) >= MAX_EVENT_FILES:
             return _err(429, "This device has sent as much as this server keeps for one request.")
-        name = store.add_events(
-            rid, {k: v for k, v in data.items() if k not in ("by", "receivedAt", "client_ip", "user_agent")}, by=user, client=client_details(req)
-        )
+        # A grouped batch is read by the group: only a link of the group may add to it.
+        if data.get("group") is not None and not group_allows(secret(), data.get("groupToken"), request, data["group"]):
+            return _err(403, "This link is not one of that review group's.")
+        server_set = ("by", "role", "groupToken", "receivedAt", "client_ip", "user_agent")
+        name = store.add_events(rid, {k: v for k, v in data.items() if k not in server_set}, by=user, client=client_details(req))
         return JSONResponse({"saved": name}, status_code=201)
+
+    async def group_endpoint(req: Request):
+        """A review group's comments (and the owner's resolves), for a holder of the group's link."""
+        rid, group = req.path_params["rid"], req.path_params["group"]
+        user = identity(req)
+        request, err = load(rid)
+        if err:
+            return err
+        if not may_read(user, request):
+            return _err(403, "This request was not sent to you.")
+        if not group_allows(secret(), req.query_params.get("t"), request, group):
+            return _err(403, "This link is not one of that review group's.")
+        return JSONResponse({"request": rid, "group": group, "batches": store.group_events(rid, group)})
 
     async def events_mine(req: Request):
         rid = req.path_params["rid"]
@@ -392,6 +407,7 @@ def mk_app(
         Route(f"{api}/requests/{{rid}}/responses", responses_endpoint, methods=["GET", "POST"]),
         Route(f"{api}/requests/{{rid}}/events", events_endpoint, methods=["GET", "POST"]),
         Route(f"{api}/requests/{{rid}}/events/mine", events_mine),
+        Route(f"{api}/requests/{{rid}}/groups/{{group}}", group_endpoint),
         Route(f"{api}/requests/{{rid}}/revisions", revisions_endpoint, methods=["GET", "POST"]),
         Route(f"{api}/requests/{{rid}}/revisions/{{n}}", revision_n),
         Route(f"{api}/requests/{{rid}}/responses/mine", mine),

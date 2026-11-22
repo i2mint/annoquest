@@ -34,10 +34,10 @@ export async function mountViewer(root: HTMLElement, { store = defaultStore() }:
   try {
     const loaded = await loadRequest();
     let request = loaded.request;
-    const { origin, reader: readerParam } = loaded;
+    const { origin, reader: readerParam, group } = loaded;
     const v = useViewer.getState();
     const device = deviceId();
-    sink = makeSink(request, (s) => useViewer.getState().setSink(s), { device });
+    sink = makeSink(request, (s) => useViewer.getState().setSink(s), { device, group });
     if (sink) v.setSink({ kind: 'saving' });
     const user = sink ? (await sink.whoami())?.toLowerCase() ?? null : null;
     v.setServerUser(user);
@@ -92,6 +92,7 @@ export async function mountViewer(root: HTMLElement, { store = defaultStore() }:
       if (missing.length) sink.push(missing);
       else v.setSink({ kind: 'sent', at: '' });
       if (request.track) tracker = createTracker((events) => sink!.push(events));
+      if (group) watchGroup(sink, group.name);
     }
 
     // The comment being written survives a reload; leaving with one unsaved asks first.
@@ -115,6 +116,23 @@ export async function mountViewer(root: HTMLElement, { store = defaultStore() }:
     useViewer.getState().fail((e as Error).message);
   }
   createRoot(root).render(<App sink={sink} tracker={tracker} />);
+}
+
+/** How often a review group's comments are read again while the page is visible. */
+const GROUP_REFRESH_MS = 20_000;
+
+/** Read the review group's comments now, again every so often while the page is visible, and on coming back to it. */
+function watchGroup(sink: HttpSink, name: string) {
+  const read = () => {
+    if (document.visibilityState !== 'visible') return;
+    void sink.group().then((logs) => {
+      if (logs) useViewer.getState().setGroup({ name, logs });
+    });
+  };
+  useViewer.getState().setGroup({ name, logs: [] });
+  read();
+  setInterval(read, GROUP_REFRESH_MS);
+  document.addEventListener('visibilitychange', read);
 }
 
 // Following a link to another request from this page only changes the fragment, and the

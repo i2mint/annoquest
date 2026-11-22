@@ -92,11 +92,15 @@ export function mergeResponses<T extends Responses>(a: T, b: Responses | undefin
     const mine = extras.get(x.id);
     if (!mine || (mine.rev ?? 0) < (x.rev ?? 0) || ((mine.rev ?? 0) === (x.rev ?? 0) && mine.at < x.at)) extras.set(x.id, x);
   }
+  // Per comment, the later resolve or reopen wins.
+  const resolutions = { ...(a.resolutions ?? {}) };
+  for (const [k, v] of Object.entries(b.resolutions ?? {})) if (!resolutions[k] || resolutions[k]!.at < v.at) resolutions[k] = v;
   return {
     ...a,
     answers,
     extras: [...extras.values()].filter((x) => !gone.has(x.id)),
     removed,
+    ...(Object.keys(resolutions).length ? { resolutions } : {}),
     updatedAt: a.updatedAt > b.updatedAt ? a.updatedAt : b.updatedAt,
     finishedAt: a.finishedAt ?? b.finishedAt,
   };

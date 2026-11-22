@@ -149,3 +149,16 @@ Views are hash routes, each a history entry so Back walks back through them: `#/
 ### Scroll depth on in-app routes
 
 The tracker measured depth only on scroll events, so a page reached by an in-app route without scrolling had none (and so did a short page). It now also measures at every beat, on the document currently shown; depth stays the furthest seen per page.
+
+## v0.4: review groups
+
+*2026-11-22.* A small group reviewing one page needs to see and answer each other's comments, and the owner needs to mark a point as handled, without the discussion moving to a chat. Opt-in per link set; without a group nothing changes (a browser reads only its own events).
+
+- **Replies.** An extra gains `parent`, the id of the comment it answers (any member's). A reply keeps its parent's target, so it highlights the same passage. Nested replies are shown flat under the first comment of their thread.
+- **Resolve.** A new event, `resolve {extra, resolved}`, folded per reader into `Responses.resolutions` (latest wins). For the group, a comment is resolved by the latest resolve or reopen of its **author** or of the **owner**; anyone else's is ignored (`groupThreads` in `src/events.ts`, which the viewer, the owner page and the export share).
+- **The group.** `python -m annoquest_server link <url> --group <name>` (and the owner page's link maker) adds `g=<name>&gt=<token>`, the token an HMAC under the server's secret of the group name and the content request's site (a guided request's id otherwise), so one group can review several pages of one site. Batches sent through such a link carry `group`; the server stores them only with a valid token, and never stores the token.
+- **Reading.** `GET /requests/<id>/groups/<name>?t=<token>` returns the group's batches, and the owner's, reduced to `extra`, `remove`, `resolve` and `name` events: comments, never reading times or client details. The viewer reads it on load and every 20 s while visible, and shows a **Discussion** (threads, Reply, Resolve on one's own comments) in place of "Your comments"; the other members' passages are highlighted too.
+- **The owner** resolves from the owner page (`POST /requests/<id>/resolve`), stored as an event batch with `role: "owner"`, set by the server only (a client's `role` is stripped). The owner's events fold as their own reader, kept apart from any reader who calls themselves `owner`.
+- **Export.** The Markdown export adds a *Discussion* section: each thread, its replies indented under it, and who resolved it.
+
+Identity stays self-declared inside a group, as before: a member could send events under another member's reader key. The group token keeps strangers out; it does not authenticate members to each other.

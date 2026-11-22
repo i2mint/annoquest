@@ -7,7 +7,8 @@ not a mode of the public reader app: every caller of this app is the owner. For 
 depth, given ``owners`` and an ``identity`` function, a caller who is not an owner is refused
 (so a manifest that forgot the gate fails closed); with no ``owners``, the gate is trusted.
 
-It only reads (requests, events) and signs (links): readers write, the owner reads. The
+It reads (requests, events), signs (links), and writes one thing of its own: the owner's
+resolve of a comment, stored as an owner event that a review group's readers see. The
 stats and exports are computed by the page with the library's fold (``foldBatches``), so
 the page, the CLI and agents read one implementation.
 """
@@ -16,6 +17,8 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -25,7 +28,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Respon
 from starlette.routing import Route
 
 from .content import content_link, load_secret, origin_of
-from .store import Store, valid_id
+from .store import GROUP_NAME_MAX, Store, valid_id
 from .web import default_data_dir
 
 MAX_LINK_BODY_BYTES = 8 * 1024
@@ -112,13 +115,41 @@ def mk_owner_app(
             return _err(400, "Body is not JSON.")
         url = (data.get("url") or "").strip() if isinstance(data, dict) else ""
         reader = ((data.get("reader") or "").strip() or None) if isinstance(data, dict) else None
+        group = ((data.get("group") or "").strip() or None) if isinstance(data, dict) else None
+        if group and len(group) > GROUP_NAME_MAX:
+            return _err(400, "That group name is too long.")
         if len(url) > MAX_URL_CHARS or origin_of(url) is None:
             return _err(400, "Give the page's full address (http:// or https://).")
         if reader and len(reader) > MAX_READER_CHARS:
             return _err(400, "That reader id is too long.")
         if not viewer:
             return _err(503, "This server does not know where the viewer is (set viewer_url or $ANNOQUEST_VIEWER_URL).")
-        return JSONResponse({"link": content_link(load_secret(store.root), url, viewer=viewer, reader=reader), "content": url, "reader": reader})
+        link = content_link(load_secret(store.root), url, viewer=viewer, reader=reader, group=group)
+        return JSONResponse({"link": link, "content": url, "reader": reader, "group": group})
+
+    async def resolve(req: Request):
+        """The owner marks a comment resolved (or open again): stored as the owner's own event, which
+        the readers of a review group see and the export shows."""
+        rid = req.path_params["rid"]
+        if not valid_id(rid) or not store.get_request(rid):
+            return _err(404, "No such request.")
+        raw = await req.body()
+        if len(raw) > MAX_LINK_BODY_BYTES:
+            return _err(413, "Body too large.")
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            return _err(400, "Body is not JSON.")
+        extra = data.get("extra") if isinstance(data, dict) else None
+        resolved = data.get("resolved", True) if isinstance(data, dict) else None
+        if not isinstance(extra, str) or not extra or len(extra) > 200 or not isinstance(resolved, bool):
+            return _err(400, 'Send {"extra": "<comment id>", "resolved": true|false}.')
+        at = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+        event = {"id": secrets.token_urlsafe(9), "session": "owner", "seq": time.time_ns() // 1_000_000, "at": at, "type": "resolve", "extra": extra, "resolved": resolved}
+        batch = {"schema": "annoquest/events", "request": rid, "reader": "owner", "device": "owner", "role": "owner", "events": [event]}
+        who = (identity(req) if identity else None) or None
+        store.add_events(rid, batch, by=who)
+        return JSONResponse({"saved": True, "event": event}, status_code=201)
 
     async def home(req: Request):
         if page_path and page_path.is_file():
@@ -135,6 +166,7 @@ def mk_owner_app(
         Route(f"{api}/requests/{{rid}}", guarded(request)),
         Route(f"{api}/requests/{{rid}}/events", guarded(events)),
         Route(f"{api}/links", guarded(links), methods=["POST"]),
+        Route(f"{api}/requests/{{rid}}/resolve", guarded(resolve), methods=["POST"]),
         Route(f"{api}/{{rest:path}}", guarded(api_404), methods=["GET", "POST", "PUT", "DELETE"]),
     ]
     return Starlette(routes=routes)

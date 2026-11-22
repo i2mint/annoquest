@@ -17,6 +17,8 @@ export interface Loaded {
   origin: Origin;
   /** `?reader=` (or its alias `?user_id=`) from the link. */
   reader?: string;
+  /** The review group the link belongs to (`?g=` and its token `?gt=`). */
+  group?: { name: string; token: string };
 }
 
 /**
@@ -28,23 +30,26 @@ export const apiBase = (doc: Document = document) => doc.querySelector<HTMLMetaE
 export async function loadRequest(loc: Location = location, doc: Document = document): Promise<Loaded> {
   const params = new URLSearchParams(loc.search);
   const reader = (params.get('reader') ?? params.get('user_id'))?.trim() || undefined;
+  const g = params.get('g')?.trim();
+  const gt = params.get('gt')?.trim();
+  const group = g && gt ? { name: g, token: gt } : undefined;
   const baked = doc.getElementById(REQUEST_SCRIPT_ID)?.textContent;
-  if (baked?.trim()) return { request: parseRequest(JSON.parse(baked)), origin: 'baked', reader };
+  if (baked?.trim()) return { request: parseRequest(JSON.parse(baked)), origin: 'baked', reader, group };
   const r = new URLSearchParams(loc.hash.slice(1)).get('r');
-  if (r) return { request: parseRequest(decodePayload(r)), origin: 'fragment', reader };
+  if (r) return { request: parseRequest(decodePayload(r)), origin: 'fragment', reader, group };
   const spec = params.get('spec');
   if (spec) {
     const res = await fetch(spec, { headers: { Accept: 'application/json' }, credentials: 'same-origin' });
     if (res.status === 401) throw new Error(messages().needSignIn);
     if (res.status === 403) throw new Error(messages().notSentToYou);
     if (!res.ok) throw new Error(messages().loadFailed(res.status));
-    return { request: parseRequest(await res.json()), origin: 'spec', reader };
+    return { request: parseRequest(await res.json()), origin: 'spec', reader, group };
   }
   const content = params.get('content');
   if (content) {
     const token = params.get('t');
     if (!token) throw new Error(messages().missingKey);
-    return { request: await contentRequest({ url: content, token, api: apiBase(doc), viewer: loc.href }), origin: 'content', reader };
+    return { request: await contentRequest({ url: content, token, api: apiBase(doc), viewer: loc.href }), origin: 'content', reader, group };
   }
   throw new Error(messages().noRequest);
 }

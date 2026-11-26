@@ -113,6 +113,11 @@ export const presets: Readonly<Record<string, ResponseType>> = Object.freeze({
   label: { kind: 'choice', label: 'Label', options: [] },
 });
 
+/** `obj[key]` only when `key` is an own property: `"toString"` / `"constructor"` are not keys. */
+function own<T>(obj: Readonly<Record<string, T>> | undefined, key: string): T | undefined {
+  return obj && Object.hasOwn(obj, key) ? obj[key] : undefined;
+}
+
 /**
  * The response type an item uses, with the request's custom presets and the item's labels applied.
  * `lang` (default English) translates a built-in preset's labels (`preset-labels.ts`); a request's
@@ -125,9 +130,9 @@ export function resolveResponseType(
 ): ResponseType {
   let rt: ResponseType | undefined;
   if (typeof item.response === 'string') {
-    const custom = request?.responseTypes?.[item.response];
-    rt = custom ?? presets[item.response];
-    if (rt && !custom && lang) rt = translated(rt, presetLabels[lang]?.[item.response]);
+    const custom = own(request?.responseTypes, item.response);
+    rt = custom ?? own(presets, item.response);
+    if (rt && !custom && lang) rt = translated(rt, own(own(presetLabels, lang), item.response));
     if (!rt) {
       const known = [...Object.keys(request?.responseTypes ?? {}), ...Object.keys(presets)].join(', ');
       throw new AnnoquestError('invalid', `Item "${item.id}" uses response type "${item.response}", which does not exist. Known: ${known}.`);
@@ -136,12 +141,12 @@ export function resolveResponseType(
     rt = item.response;
   }
   if (!item.labels) return rt;
-  return { ...rt, options: rt.options.map((opt) => (item.labels?.[opt.value] ? { ...opt, label: item.labels[opt.value]! } : opt)) };
+  return { ...rt, options: rt.options.map((opt) => (own(item.labels, opt.value) ? { ...opt, label: own(item.labels, opt.value)! } : opt)) };
 }
 
 function translated(rt: ResponseType, t: { label?: string; options?: Readonly<Record<string, string>> } | undefined): ResponseType {
   if (!t) return rt;
-  return { ...rt, label: t.label ?? rt.label, options: rt.options.map((opt) => (t.options?.[opt.value] ? { ...opt, label: t.options[opt.value]! } : opt)) };
+  return { ...rt, label: t.label ?? rt.label, options: rt.options.map((opt) => (own(t.options, opt.value) ? { ...opt, label: own(t.options, opt.value)! } : opt)) };
 }
 
 /** Whether an answer with this option needs a comment. */

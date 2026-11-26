@@ -97,3 +97,17 @@ describe('preset labels per language (#25)', () => {
     }
   });
 });
+
+describe('preset lookup ignores inherited properties', () => {
+  it.each(['toString', 'constructor', '__proto__', 'hasOwnProperty'])('"%s" is not a response type', (name) => {
+    for (const lang of [undefined, 'fr' as const]) {
+      expect(() => resolveResponseType({ id: 'q1', response: name }, undefined, { lang })).toThrow(/does not exist/);
+    }
+  });
+
+  it('an option value named like an inherited property takes no label', () => {
+    const request = { responseTypes: { pick: { kind: 'choice' as const, label: 'Pick', options: [{ value: 'constructor', label: 'C', tone: 'neutral' as const }] } } };
+    const rt = resolveResponseType({ id: 'q1', response: 'pick', labels: {} }, request as never);
+    expect(rt.options[0]!.label).toBe('C');
+  });
+});

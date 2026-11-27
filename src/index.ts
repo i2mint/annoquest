@@ -28,6 +28,7 @@ export {
   occurrenceOf,
   passageHash,
   type TextIndex,
+  type IndexOptions,
   type Match,
   type FindResult,
 } from './anchor';

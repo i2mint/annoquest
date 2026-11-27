@@ -52,8 +52,13 @@ export interface TextIndex {
   offsetOf: Int32Array;
 }
 
-/** Index the text under `root`, skipping scripts, styles and navigation. */
-export function indexText(root: Node): TextIndex {
+export interface IndexOptions {
+  /** Elements to leave out, with everything under them (a widget's own overlay inside the root, say). */
+  skip?: (el: Element) => boolean;
+}
+
+/** Index the text under `root`, skipping scripts, styles and navigation, and whatever `skip` names. */
+export function indexText(root: Node, { skip }: IndexOptions = {}): TextIndex {
   const nodes: Text[] = [];
   const nodeOf: number[] = [];
   const offsetOf: number[] = [];
@@ -69,7 +74,7 @@ export function indexText(root: Node): TextIndex {
   const walk = (n: Node) => {
     if (n.nodeType === ELEMENT_NODE) {
       const tag = (n as Element).tagName.toUpperCase();
-      if (SKIP.has(tag)) return;
+      if (SKIP.has(tag) || skip?.(n as Element)) return;
       const block = BLOCK.has(tag);
       if (block) boundary();
       for (let c = n.firstChild; c; c = c.nextSibling) walk(c);

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { parseHTML } from 'linkedom';
 import { describe, expect, it } from 'vitest';
 import * as anchor from '../src/anchor';
 
@@ -16,6 +17,15 @@ describe('the anchor subpath', () => {
     for (const name of ['normalizeText', 'indexText', 'findQuote', 'matchToRange', 'positionOf', 'describeQuote', 'occurrenceOf']) {
       expect(typeof (anchor as Record<string, unknown>)[name]).toBe('function');
     }
+  });
+
+  it('leaves out the elements a caller asks to skip, so an overlay inside the root is never matched', () => {
+    const { document } = parseHTML('<main><p>Kept text here.</p><aside class="overlay"><p>Kept text, quoted in a card.</p></aside></main>');
+    const root = document.querySelector('main')!;
+    expect(anchor.indexText(root).text).toContain('quoted in a card');
+    const index = anchor.indexText(root, { skip: (el) => el.classList.contains('overlay') });
+    expect(index.text).toBe('Kept text here.');
+    expect(anchor.findQuote(index, { exact: 'quoted in a card' }).ok).toBe(false);
   });
 
   // The build runs before the tests in CI; a checkout that has not been built skips this.

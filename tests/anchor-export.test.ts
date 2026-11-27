@@ -24,7 +24,7 @@ describe('the anchor subpath', () => {
     const root = document.querySelector('main')!;
     expect(anchor.indexText(root).text).toContain('quoted in a card');
     const index = anchor.indexText(root, { skip: (el) => el.classList.contains('overlay') });
-    expect(index.text).toBe('Kept text here.');
+    expect(index.text.trim()).toBe('Kept text here.'); // a block boundary reads as a space
     expect(anchor.findQuote(index, { exact: 'quoted in a card' }).ok).toBe(false);
   });
 

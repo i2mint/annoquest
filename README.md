@@ -130,6 +130,23 @@ ANNOQUEST_IDENTITY_HEADER=X-Forwarded-User uvicorn annoquest_server:mk_app --fac
 
 **Open a request's link yourself before sending it**: that registers it (only its sender can), and the viewer shows a preview banner so nothing you click is sent. It serves the viewer at `/`, stores each request once and every save as a new file (`requests/<id>.json`, `responses/<id>/<reader>/<stamp>.json`, no emails in paths), lets a request's listed readers and its requester in, and lets only the requester read everyone's answers. `ANNOQUEST_DOCS_DIR` serves a folder at `/doc/` so documents are same-origin with the viewer. Collect by pointing `annoquest collect` at the data directory. See [annoquest_server/README.md](annoquest_server/README.md).
 
+
+## The anchoring core alone
+
+`annoquest/anchor` is the part that finds a passage again after the page changed, with nothing else attached (no zod, no zip, no DOM library): `indexText(root)` indexes the text under an element, `describeQuote(index, start, end)` turns a span into a quote with enough context to be unique, `findQuote(index, quote)` finds it (exactly, then approximately), `positionOf` and `matchToRange` convert between DOM points and index positions. A page that highlights passages of its own can use it without the request machinery.
+
+```ts
+import { indexText, describeQuote, findQuote, matchToRange, positionOf } from 'annoquest/anchor';
+
+const index = indexText(article);
+const range = getSelection()!.getRangeAt(0);
+const quote = describeQuote(index, positionOf(index, range.startContainer, range.startOffset), positionOf(index, range.endContainer, range.endOffset));
+// later, on a page that may have changed:
+const now = indexText(article);
+const found = findQuote(now, quote);
+if (found.ok) CSS.highlights.set('kept', new Highlight(matchToRange(now, found.match, document)));
+```
+
 ## For agents
 
 `skills/annoquest/SKILL.md` is the procedure for building a request (pick items, anchor them, choose response types, check, deliver, collect). Install it with `gh skill install i2mint/annoquest annoquest`, or read [llms.txt](llms.txt).
